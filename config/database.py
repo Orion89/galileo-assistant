@@ -1,63 +1,53 @@
-import sqlite3
+# import sqlite3
+import chainlit as cl
 from datetime import datetime
 
-DB_PATH = "galileo_chat.db"
+# DB_PATH = "galileo_chat.db"
 
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            email TEXT PRIMARY KEY,
-            created_at TEXT,
-            last_active TEXT
-        )
-    ''')
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_email TEXT,
-            role TEXT,
-            content TEXT,
-            timestamp_utc TEXT,
-            response_time_seconds REAL,
-            FOREIGN KEY (user_email) REFERENCES users(email)
-        )
-    ''')
-    conn.commit()
-    conn.close()
+    # Con la Official Data Layer de Chainlit no se requiere inicialización.
+    pass
 
-def register_user(email):
+def register_user(email: str):
     now = datetime.utcnow().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('SELECT email FROM users WHERE email = ?', (email,))
-    if not c.fetchone():
-        c.execute('INSERT INTO users VALUES (?, ?, ?)', (email, now, now))
+    user_key = f"user:{email}"
+    user_data = cl.data.get(user_key)
+    if not user_data:
+        user_data = {
+            "email": email,
+            "created_at": now,
+            "last_active": now,
+            "messages": []
+        }
     else:
-        c.execute('UPDATE users SET last_active = ? WHERE email = ?', (now, email))
-    conn.commit()
-    conn.close()
+        user_data["last_active"] = now
+    cl.data.set(user_key, user_data)
 
-def save_message(user_email, role, content, response_time=None):
+def save_message(user_email: str, role: str, content: str, response_time: float = None):
     now = datetime.utcnow().isoformat()
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        INSERT INTO messages (user_email, role, content, timestamp_utc, response_time_seconds)
-        VALUES (?, ?, ?, ?, ?)
-    ''', (user_email, role, content, now, response_time))
-    conn.commit()
-    conn.close()
+    message = {
+        "role": role,
+        "content": content,
+        "timestamp_utc": now,
+        "response_time_seconds": response_time
+    }
+    user_key = f"user:{user_email}"
+    user_data = cl.data.get(user_key)
+    if not user_data:
+        user_data = {
+            "email": user_email,
+            "created_at": now,
+            "last_active": now,
+            "messages": []
+        }
+    if "messages" not in user_data:
+        user_data["messages"] = []
+    user_data["messages"].append(message)
+    cl.data.set(user_key, user_data)
 
-def get_user_messages(user_email):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('''
-        SELECT role, content, timestamp_utc FROM messages
-        WHERE user_email = ?
-        ORDER BY id ASC
-    ''', (user_email,))
-    messages = c.fetchall()
-    conn.close()
-    return messages
+def get_user_messages(user_email: str):
+    user_key = f"user:{user_email}"
+    user_data = cl.data.get(user_key)
+    if user_data:
+        return user_data.get("messages", [])
+    return []

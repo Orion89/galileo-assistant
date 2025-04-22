@@ -5,7 +5,7 @@ import os
 import re
 import time
 
-from config.database import init_db, register_user, save_message, get_user_messages
+# from config.database import init_db, register_user, save_message, get_user_messages
 
 import chainlit as cl
 from chainlit.input_widget import TextInput
@@ -13,38 +13,18 @@ import openai
 from dotenv import load_dotenv
 
 load_dotenv()
-init_db()
 
 EMAIL_REGEX = r"^[\w\.-]+@[\w\.-]+\.\w{2,4}$"
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID = os.getenv("ASSISTANT_ID")
+openai.api_key = OPENAI_API_KEY
+FILE_MAP = {f.id: f.filename.partition(".pdf")[0] for f in openai.files.list().data if f.purpose == "assistants"}
 
 if not OPENAI_API_KEY or not ASSISTANT_ID:
     raise ValueError("OPENAI_API_KEY and ASSISTANT_ID must be set in the environment variables.")
 
-# Cliente de OpenAI
-openai.api_key = OPENAI_API_KEY
-FILE_MAP = {f.id: f.filename.partition(".pdf")[0] for f in openai.files.list().data if f.purpose == "assistants"}
-
-# Manejo de archivos por usuario
-def get_user_data(user_id):
-    user_folder = os.path.join("conversations", user_id)
-    filename = os.path.join(user_folder, "thread.json")
-    if os.path.exists(filename):
-        with open(filename, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {"thread_id": None, "messages": []}
-
-def save_user_data(user_id, thread_id, messages):
-    user_folder = os.path.join("conversations", user_id)
-    os.makedirs(user_folder, exist_ok=True)
-    filename = os.path.join(user_folder, "thread.json")
-    data = {"thread_id": thread_id, "messages": messages}
-    with open(filename, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=4)
-
-# Procesar contenido del Assistant con citas
 def extract_message_content(message):
+    """Extrae el contenido de la respuesta del Assistant, incorporando citas si las hay."""
     parts = []
     for item in message.content:
         if item.type == "text":
@@ -57,8 +37,8 @@ def extract_message_content(message):
             parts.append(text)
     return "\n\n".join(parts) if parts else "Sin respuesta."
 
-# Animación de "pensando..."
 async def animate_thinking(message, stop_flag):
+    """Animación sencilla para indicar al usuario que se está procesando la respuesta."""
     dots = [".", "..", "..."]
     i = 0
     while not stop_flag["done"]:
@@ -67,69 +47,77 @@ async def animate_thinking(message, stop_flag):
         i += 1
         await asyncio.sleep(0.6)
 
-
 @cl.on_chat_start
 async def on_chat_start():
-    while True:
+    """
+    Hook que se ejecuta al iniciar la conversación.
+    Solicita el correo electrónico del usuario (autenticación simple) y almacena
+    el identificador en la user session de Chainlit.
+    """
+    # Se solicita el correo mientras no esté definido en la sesión.
+    while not cl.user_session.get("user_id"):
         res_email = await cl.AskUserMessage("📧 Ingresa tu correo electrónico para comenzar:").send()
         if not res_email or res_email.get("output") is None:
             await cl.Message(content="❌ No se recibió un correo. Intenta nuevamente.").send()
             continue
-
         email = res_email["output"].strip()
-        if re.match(EMAIL_REGEX, email):
+        if re.match(r"^[\w\.-]+@[\w\.-]+\.\w{2,4}$", email):
+            cl.user_session.set("user_id", email)
             break
         else:
             await cl.Message(content="❌ El formato del correo no es válido. Intenta nuevamente.").send()
+    await cl.Message(content="👋 ¡Bienvenido a Galileo! Puedes comenzar tu conversación.").send()
+    
 
-    # Guardar sesión y registrar usuario
-    cl.user_session.set("user_id", email)
-    register_user(email)
-
-    # Mostrar historial
-    history = get_user_messages(email)
-    if history:
+@cl.on_chat_resume
+async def on_chat_resume():
+    """
+    Hook que se ejecuta al reanudar la conversación.
+    Se recupera el historial guardado a través de la Official Data Layer (solo se muestran
+    los campos estándar como author y content).
+    """
+    if cl.chat_history:
         await cl.Message(content="📜 Recuperando tu historial anterior...").send()
-        for role, content, ts in history:
-            await cl.Message(author=role, content=content).send()
-    else:
-        await cl.Message(content="👋 ¡Bienvenido a Galileo! Puedes comenzar tu conversación.").send()
-
+        for msg in cl.chat_history:
+            await cl.Message(author=msg.author, content=msg.content).send()
 
 @cl.on_message
 async def main(message: cl.Message):
-    # Recuperar el correo electrónico como user_id
-    user_email = cl.user_session.get("user_id")
-    if not user_email:
+    """
+    Maneja la interacción con el usuario.
+    Se conecta al Assistant ya creado, se actualiza el mensaje de 'pensando' y se muestra
+    la respuesta. Los mensajes se almacenan utilizando la Official Data Layer con sus campos estándar.
+    """
+    if not cl.user_session.get("user_id"):
         await cl.Message(content="⚠️ Usuario no autenticado.").send()
         return
 
     user_input = message.content
     start_time = time.time()
 
-    # Mostrar mensaje de espera
+    # Se muestra mensaje de "pensando"
     thinking_msg = await cl.Message(content="🤖 Pensando.").send()
     stop_flag = {"done": False}
     animation_task = asyncio.create_task(animate_thinking(thinking_msg, stop_flag))
 
-    # Crear un nuevo thread
+    # Se crea un nuevo thread en OpenAI para la conversación
     thread = openai.beta.threads.create()
     thread_id = thread.id
 
-    # Agregar mensaje del usuario
+    # Se añade el mensaje del usuario
     openai.beta.threads.messages.create(
         thread_id=thread_id,
         role="user",
         content=user_input
     )
 
-    # Crear ejecución
+    # Se inicia la ejecución del Assistant
     run = openai.beta.threads.runs.create(
         thread_id=thread_id,
         assistant_id=ASSISTANT_ID
     )
 
-    # Esperar respuesta
+    # Se espera hasta que el run se complete
     while True:
         run_status = openai.beta.threads.runs.retrieve(
             thread_id=thread_id,
@@ -146,7 +134,7 @@ async def main(message: cl.Message):
         await thinking_msg.update()
         return
 
-    # Obtener la respuesta
+    # Se obtiene y procesa la respuesta del Assistant
     messages_response = openai.beta.threads.messages.list(thread_id=thread_id)
     assistant_messages = [msg for msg in messages_response.data if msg.role == "assistant"]
     bot_reply = extract_message_content(assistant_messages[0]) if assistant_messages else "Sin respuesta."
@@ -154,14 +142,11 @@ async def main(message: cl.Message):
     stop_flag["done"] = True
     await animation_task
 
-    # Guardar mensajes en base de datos
-    response_time = round(time.time() - start_time, 2)
-    save_message(user_email, role="user", content=user_input)
-    save_message(user_email, role="assistant", content=bot_reply, response_time=response_time)
-
-    # Mostrar respuesta en interfaz
+    # Se actualiza el mensaje "pensando" con la respuesta final.
+    # La respuesta se persistirá usando la Official Data Layer, almacenando solo los campos estándar.
     thinking_msg.content = bot_reply
     await thinking_msg.update()
+
 
 # Configuración de la app Chainlit
 if __name__ == "__main__":

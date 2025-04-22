@@ -1,3 +1,5 @@
 llamadas_api.ipynb
 .env
+init_db.py
+chainlit-datalayer
 __pycache__
