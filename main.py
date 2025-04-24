@@ -8,6 +8,8 @@ import time
 # from config.database import init_db, register_user, save_message, get_user_messages
 
 import chainlit as cl
+from chainlit import User
+from chainlit.data import get_data_layer
 from chainlit.input_widget import TextInput
 import openai
 from dotenv import load_dotenv
@@ -47,39 +49,43 @@ async def animate_thinking(message, stop_flag):
         i += 1
         await asyncio.sleep(0.6)
 
+
+@cl.password_auth_callback
+def email_only_auth(username: str, password: str | None = None):
+    """
+    Accept any well-formed e-mail as `username` and ignore `password`.
+    Returning a `cl.User` authenticates the session so chat-history works.
+    """
+    if re.match(EMAIL_REGEX, username):
+        return User(identifier=username, metadata={"email": username})
+    return None
+
+
 @cl.on_chat_start
 async def on_chat_start():
-    """
-    Hook que se ejecuta al iniciar la conversación.
-    Solicita el correo electrónico del usuario (autenticación simple) y almacena
-    el identificador en la user session de Chainlit.
-    """
-    # Se solicita el correo mientras no esté definido en la sesión.
-    while not cl.user_session.get("user_id"):
-        res_email = await cl.AskUserMessage("📧 Ingresa tu correo electrónico para comenzar:").send()
-        if not res_email or res_email.get("output") is None:
-            await cl.Message(content="❌ No se recibió un correo. Intenta nuevamente.").send()
-            continue
-        email = res_email["output"].strip()
-        if re.match(r"^[\w\.-]+@[\w\.-]+\.\w{2,4}$", email):
-            cl.user_session.set("user_id", email)
-            break
-        else:
-            await cl.Message(content="❌ El formato del correo no es válido. Intenta nuevamente.").send()
-    await cl.Message(content="👋 ¡Bienvenido a Galileo! Puedes comenzar tu conversación.").send()
-    
+    user: User = cl.user_session.get("user")          # creado por el callback
+    await cl.Message(
+        f"👋 ¡Hola **{user.metadata['email']}**! Ya puedes comenzar."
+    ).send()
+    cl.user_session.set("email", user.identifier)
+    # --- PERSISTENCIA OPCIONAL DEL USUARIO -----------------------------
+    dl = get_data_layer()
+    if dl:
+        persisted = await dl.get_user(user.identifier)
+        if persisted is None:
+            await dl.create_user(user)
+
 
 @cl.on_chat_resume
 async def on_chat_resume():
-    """
-    Hook que se ejecuta al reanudar la conversación.
-    Se recupera el historial guardado a través de la Official Data Layer (solo se muestran
-    los campos estándar como author y content).
-    """
-    if cl.chat_history:
-        await cl.Message(content="📜 Recuperando tu historial anterior...").send()
-        for msg in cl.chat_history:
-            await cl.Message(author=msg.author, content=msg.content).send()
+    # Restore OpenAI thread for continuity
+    metadata = thread.get("metadata", {})
+    if "openai_thread_id" in metadata:
+        cl.user_session.set("thread_id", metadata["openai_thread_id"])
+
+    # Re-display history in the UI
+    for msg in cl.chat_history:
+        await cl.Message(author=msg.author, content=msg.content).send()
 
 @cl.on_message
 async def main(message: cl.Message):
@@ -88,21 +94,25 @@ async def main(message: cl.Message):
     Se conecta al Assistant ya creado, se actualiza el mensaje de 'pensando' y se muestra
     la respuesta. Los mensajes se almacenan utilizando la Official Data Layer con sus campos estándar.
     """
-    if not cl.user_session.get("user_id"):
-        await cl.Message(content="⚠️ Usuario no autenticado.").send()
+    if cl.user_session.get("user") is None:
+        await cl.Message("⚠️ Usuario no autenticado.").send()
         return
-
     user_input = message.content
-    start_time = time.time()
-
+    # start_time = time.time()
     # Se muestra mensaje de "pensando"
-    thinking_msg = await cl.Message(content="🤖 Pensando.").send()
-    stop_flag = {"done": False}
-    animation_task = asyncio.create_task(animate_thinking(thinking_msg, stop_flag))
+    user_input = message.content
+    thinking = await cl.Message("🤖 Pensando").send()
+    stop = {"done": False}
+    anim = asyncio.create_task(animate_thinking(thinking, stop))
 
     # Se crea un nuevo thread en OpenAI para la conversación
-    thread = openai.beta.threads.create()
-    thread_id = thread.id
+    if not cl.user_session.get("thread_id"):
+        thread_id = openai.beta.threads.create().id
+        cl.user_session.set("thread_id", thread_id)
+    thread_id = cl.user_session.get("thread_id")
+
+    if not cl.context.current_thread.metadata.get("openai_thread_id"):
+        cl.context.current_thread.metadata["openai_thread_id"] = thread_id
 
     # Se añade el mensaje del usuario
     openai.beta.threads.messages.create(
@@ -128,10 +138,10 @@ async def main(message: cl.Message):
         await asyncio.sleep(1)
 
     if run_status.status != "completed":
-        stop_flag["done"] = True
-        await animation_task
-        thinking_msg.content = "⚠️ Ocurrió un error al generar la respuesta."
-        await thinking_msg.update()
+        stop["done"] = True
+        await anim
+        thinking.content = "⚠️ Ocurrió un error al generar la respuesta."
+        await thinking.update()
         return
 
     # Se obtiene y procesa la respuesta del Assistant
@@ -139,14 +149,12 @@ async def main(message: cl.Message):
     assistant_messages = [msg for msg in messages_response.data if msg.role == "assistant"]
     bot_reply = extract_message_content(assistant_messages[0]) if assistant_messages else "Sin respuesta."
 
-    stop_flag["done"] = True
-    await animation_task
-
-    # Se actualiza el mensaje "pensando" con la respuesta final.
-    # La respuesta se persistirá usando la Official Data Layer, almacenando solo los campos estándar.
-    thinking_msg.content = bot_reply
-    await thinking_msg.update()
-
+    stop["done"] = True
+    await anim
+    thinking.content = bot_reply
+    thinking.author = "assistant"               # ⬅️  ¡clave para reconstruir la UI!
+    await thinking.delete()                    # optional: remove spinner
+    await cl.Message(bot_reply).send()         # persisted as assistant step
 
 # Configuración de la app Chainlit
 if __name__ == "__main__":

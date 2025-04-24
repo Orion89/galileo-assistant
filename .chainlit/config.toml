@@ -120,3 +120,13 @@ url = "https://tusitio.cl/docs"
 
 [meta]
 generated_by = "2.4.400"
+
+[data_layer]
+# Módulo que implementa la capa (el de su repo oficial)
+module = "chainlit_datalayer"
+
+# URL de conexión a PostgreSQL (usa tu variable de entorno de Railway)
+database_url = "${DATABASE_URL}"
+
+# Clave secreta para firmar las cookies de sesión
+secret_key = "${SECRET_KEY}"
