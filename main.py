@@ -1,15 +1,7 @@
-"""main.py — Chainlit 2.4.400 (metadata fix)
-=================================================
-Resuelve el `AttributeError: 'WebsocketSession' object has no attribute 'metadata'`.
-Ahora la relación **hilo Chainlit ⇆ hilo OpenAI** se guarda mediante
-`data_layer.update_thread(metadata={...})`, sin tocar atributos internos
-de la sesión WebSocket.
-"""
-
 import asyncio
 import os
 import re
-import asyncio
+
 from dotenv import load_dotenv
 import chainlit as cl
 from chainlit import User
@@ -26,7 +18,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 ASSISTANT_ID = os.getenv("ASSISTANT_ID")
 
 if not OPENAI_API_KEY or not ASSISTANT_ID:
-    raise RuntimeError("Debes definir OPENAI_API_KEY y ASSISTANT_ID en tu entorno.")
+    raise RuntimeError("Definir OPENAI_API_KEY y ASSISTANT_ID en el entorno.")
 
 openai.api_key = OPENAI_API_KEY
 
@@ -77,6 +69,7 @@ async def chat_start():
         if await dl.get_user(user.identifier) is None:
             await dl.create_user(user)
 
+
 @cl.on_chat_resume
 async def chat_resume(thread):  # ThreadDict
     if tid := thread.get("metadata", {}).get("openai_thread_id"):
@@ -84,9 +77,7 @@ async def chat_resume(thread):  # ThreadDict
     for m in cl.chat_history:
         await cl.Message(author=m.author, content=m.content).send()
 
-# --------------------------------------------------------------------------------------
-# Lógica de mensaje
-# --------------------------------------------------------------------------------------
+
 @cl.on_message
 async def handle(msg: cl.Message):
     if cl.user_session.get("user") is None:
@@ -109,16 +100,18 @@ async def handle(msg: cl.Message):
             metadata={"openai_thread_id": openai_tid},
         )
 
-    # --- Llamada a OpenAI ------------------------------------------------------------
+    # Llamada a OpenAI
     openai.beta.threads.messages.create(thread_id=openai_tid, role="user", content=msg.content)
     run = openai.beta.threads.runs.create(thread_id=openai_tid, assistant_id=ASSISTANT_ID)
     while True:
         status = openai.beta.threads.runs.retrieve(thread_id=openai_tid, run_id=run.id)
-        if status.status in {"completed", "failed", "cancelled"}: break
+        if status.status in {"completed", "failed", "cancelled"}:
+            break
         await asyncio.sleep(1)
 
     if status.status != "completed":
-        flag["done"] = True; await anim
+        flag["done"] = True
+        await anim
         await thinking.update(content="⚠️ Error al generar respuesta."); return
 
     msgs = openai.beta.threads.messages.list(thread_id=openai_tid).data
@@ -129,4 +122,4 @@ async def handle(msg: cl.Message):
 
 # --------------------------------------------------------------------------------------
 if __name__ == "__main__":
-    cl.app(title="Galileo OpenAI Assistant", description="Demo para interactuar con Galileo.", theme="dark")
+    cl.app(title="Galileo OpenAI Assistant", description="Chainlit app para interactuar con Galileo, de MIC Business Consulting.", theme="dark")
