@@ -1,12 +1,32 @@
 import asyncio
+import logging
 import os
 import re
+import sys
 
 from dotenv import load_dotenv
 import chainlit as cl
 from chainlit import User
 from chainlit.data import get_data_layer
 import openai
+
+# Configuración de logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(nivelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("app.log"),  # Archivo de logs
+        logging.StreamHandler()         # Consola
+    ]
+)
+
+def handle_exception(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        sys.__excepthook__(exc_type, exc_value, exc_traceback)
+        return
+    logging.critical("Excepción no controlada", exc_info=(exc_type, exc_value, exc_traceback))
+
+sys.excepthook = handle_exception
 
 load_dotenv()
 
@@ -39,6 +59,7 @@ def extract_message_content(message):
             parts.append(txt)
     return "\n\n".join(parts) if parts else "Sin respuesta."
 
+
 async def spinner(msg, flag):
     dots = [".", "..", "..."]
     i = 0
@@ -54,7 +75,9 @@ async def spinner(msg, flag):
 @cl.password_auth_callback
 def email_auth(user: str, pwd: str | None = None):
     if re.match(EMAIL_REGEX, user):
+        logging.info(f"Usuario autenticado: {user}")
         return User(identifier=user, metadata={"email": user})
+    logging.warning(f"Intento de autenticación fallido para: {user}")
     return None
 
 # --------------------------------------------------------------------------------------
@@ -63,6 +86,7 @@ def email_auth(user: str, pwd: str | None = None):
 @cl.on_chat_start
 async def chat_start():
     user: User = cl.user_session.get("user")
+    logging.info(f"Inicio de chat para usuario: {user.metadata['email']}")
     await cl.Message(f"👋 ¡Hola **{user.metadata['email']}**! Ya puedes comenzar.").send()
 
     if dl := get_data_layer():
@@ -72,14 +96,16 @@ async def chat_start():
 
 @cl.on_chat_resume
 async def chat_resume(thread):  # ThreadDict
+    logging.info(f"Reanudando chat con metadata: {thread.get('metadata', {})}")
     if tid := thread.get("metadata", {}).get("openai_thread_id"):
         cl.user_session.set("openai_thread_id", tid)
-    for m in cl.chat_history:
-        await cl.Message(author=m.author, content=m.content).send()
+    #for m in cl.chat_history:
+    #    await cl.Message(author=m.author, content=m.content).send()
 
 
 @cl.on_message
 async def handle(msg: cl.Message):
+    logging.info(f"Mensaje recibido: {msg.content}")
     if cl.user_session.get("user") is None:
         await cl.Message("⚠️ Usuario no autenticado.").send(); return
 
@@ -90,10 +116,16 @@ async def handle(msg: cl.Message):
     # --- Hilo OpenAI ------------------------------------------------------------------
     openai_tid = cl.user_session.get("openai_thread_id")
     if not openai_tid:
-        openai_tid = openai.beta.threads.create().id
-        cl.user_session.set("openai_thread_id", openai_tid)
+        try:
+            openai_tid = openai.beta.threads.create().id
+            cl.user_session.set("openai_thread_id", openai_tid)
+            logging.info(f"Nuevo thread_id creado: {openai_tid}")
+        except Exception as e:
+            logging.error(f"Error al crear thread_id: {e}")
+            await cl.Message("⚠️ Error al iniciar hilo de OpenAI.").send()
+            return
 
-    # Persistimos el mapping en el Data Layer                             ❶
+    # Persistimos el mapping en el Data Layer                             
     if dl := get_data_layer():
         await dl.update_thread(
             thread_id=cl.context.session.thread_id,
@@ -101,21 +133,35 @@ async def handle(msg: cl.Message):
         )
 
     # Llamada a OpenAI
-    openai.beta.threads.messages.create(thread_id=openai_tid, role="user", content=msg.content)
-    run = openai.beta.threads.runs.create(thread_id=openai_tid, assistant_id=ASSISTANT_ID)
+    try:
+        openai.beta.threads.messages.create(thread_id=openai_tid, role="user", content=msg.content)
+        logging.info(f"Mensaje enviado a OpenAI: {msg.content}")
+        run = openai.beta.threads.runs.create(thread_id=openai_tid, assistant_id=ASSISTANT_ID)
+        logging.info(f"Run iniciado: {run.id}")
+    except Exception as e:
+        logging.error(f"Error al enviar mensaje a OpenAI: {e}")
+        flag["done"] = True
+        await anim
+        await thinking.update(content="⚠️ Error al generar respuesta.")
+        return
+
     while True:
         status = openai.beta.threads.runs.retrieve(thread_id=openai_tid, run_id=run.id)
+        logging.info(f"Estado del run {run.id}: {status.status}")
         if status.status in {"completed", "failed", "cancelled"}:
             break
         await asyncio.sleep(1)
 
     if status.status != "completed":
+        logging.error(f"Run {run.id} fallido con estado: {status.status}")
         flag["done"] = True
         await anim
-        await thinking.update(content="⚠️ Error al generar respuesta."); return
+        await thinking.update(content="⚠️ Error al generar respuesta.")
+        return
 
     msgs = openai.beta.threads.messages.list(thread_id=openai_tid).data
     reply = extract_message_content(next(m for m in msgs if m.role == "assistant"))
+    logging.info(f"Respuesta generada por OpenAI: {reply}")
 
     flag["done"] = True; await anim; await thinking.remove()
     await cl.Message(reply).send()
