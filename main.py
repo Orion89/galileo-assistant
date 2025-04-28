@@ -1,4 +1,3 @@
-# main.py  –  Chainlit 2.4.400 · Streaming + Files + Code-Interpreter + File-Search
 import asyncio
 from datetime import datetime, timezone
 import logging
@@ -123,7 +122,6 @@ class StreamHandler(AsyncAssistantEventHandler):
             await self.step.stream_token(delta.code_interpreter.input)
 
     async def on_tool_call_done(self, call):
-        # Marca opcional: hora de término en UTC
         self.step.end = datetime.now(timezone.utc).isoformat()
         await self.step.update()
 
