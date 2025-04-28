@@ -94,7 +94,8 @@ cot = "full"
 # custom_js = "/public/test.js"
 
 # Custom login page image, relative to public directory or external URL
-login_page_image = "https://static.wixstatic.com/media/d0a84d_09f1f7434eec4aad845de95fa971f690~mv2.png"
+# login_page_image = "https://static.wixstatic.com/media/d0a84d_09f1f7434eec4aad845de95fa971f690~mv2.png"
+login_page_image = "/public/logo_light.png"
 
 # Custom login page image filter (Tailwind internal filters, no dark/light variants)
 # login_page_image_filter = "brightness-50 grayscale"
@@ -130,3 +131,8 @@ database_url = "${DATABASE_URL}"
 
 # Clave secreta para firmar las cookies de sesión
 secret_key = "${SECRET_KEY}"
+
+[data_layer.storage]
+provider = "s3"
+bucket   = "micbc-chainlit-elements"
+region   = "us-east-2"

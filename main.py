@@ -16,7 +16,7 @@ from chainlit.element import Element
 from dotenv import load_dotenv
 from openai import AsyncAssistantEventHandler, AsyncOpenAI, OpenAI
 
-# ────────────────────────────────  LOGGING  ────────────────────────────────────
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(message)s",
@@ -39,7 +39,6 @@ if not OPENAI_KEY or not ASST_ID:
 # Cliente síncrono solo para metadata
 sync_oai  = OpenAI(api_key=OPENAI_KEY)
 assistant = sync_oai.beta.assistants.retrieve(ASST_ID)
-
 # Cliente asíncrono para la sesión
 oai = AsyncOpenAI(api_key=OPENAI_KEY)
 
@@ -62,6 +61,7 @@ def _extract_answer(msg):
             parts.append(txt)
     return "\n\n".join(parts) if parts else "Sin respuesta."
 
+
 async def _upload_files(elements: List[Element]) -> list[dict]:
     """Sube archivos adjuntos y construye la lista 'attachments' para la API."""
     if not elements:
@@ -78,15 +78,30 @@ async def _upload_files(elements: List[Element]) -> list[dict]:
         for fid in file_ids
     ]
 
-# ─────────────────────────────  STREAM HANDLER  ────────────────────────────────
+
+async def _spinner(msg: cl.Message, stop: dict):
+    """Muestra 'Pensando', 'Pensando.' … hasta que stop["done"] sea True."""
+    dots = ["", ".", "..", "..."]
+    i = 0
+    while not stop["done"]:
+        msg.content = f"🤖 Pensando{dots[i % 4]}"
+        await msg.update()
+        i += 1
+        await asyncio.sleep(0.6)
+
+
 class StreamHandler(AsyncAssistantEventHandler):
-    def __init__(self):
+    def __init__(self, spin_msg: cl.Message, stop_flag: dict):
         super().__init__()
+        self.spin_msg = spin_msg
+        self.stop_flag = stop_flag
         self.msg:  cl.Message | None = None
         self.step: cl.Step    | None = None
 
     # — texto del asistente —
     async def on_text_created(self, text):
+        self.stop_flag["done"] = True
+        await self.spin_msg.remove()
         self.msg = await cl.Message(author=assistant.name, content="").send()
 
     async def on_text_delta(self, delta, snapshot):
@@ -121,7 +136,7 @@ def auth(email: str, pwd: str | None = None):
 @cl.on_chat_start
 async def on_start():
     user: User = cl.user_session.get("user")
-    await cl.Message(f"👋 ¡Hola **{user.metadata['email']}**!").send()
+    await cl.Message(f"👋 ¡Hola **{user.metadata['email']}**! Soy Galileo, agente de IA especializado en la revisión y optimización de decks de inversión para startups que buscan financiamiento de un CVC ¿En qué puedo ayudarte hoy?").send()
 
     thread = await oai.beta.threads.create()
     cl.user_session.set("thread_id", thread.id)
@@ -144,7 +159,8 @@ async def on_resume(meta):
 async def on_message(msg: cl.Message):
     thread_id = cl.user_session.get("thread_id")
     if not thread_id:
-        await cl.Message("⚠️ Sesión no inicializada.").send(); return
+        await cl.Message("⚠️ Sesión no inicializada.").send()
+        return
 
     attachments = await _upload_files(msg.elements)
 
@@ -155,12 +171,19 @@ async def on_message(msg: cl.Message):
         attachments=attachments,
     )
 
+    thinking = await cl.Message("🤖 Pensando").send()
+    stop = {"done": False}
+    spinner_task = asyncio.create_task(_spinner(thinking, stop))
+
     async with oai.beta.threads.runs.stream(
         thread_id=thread_id,
         assistant_id=ASST_ID,
-        event_handler=StreamHandler(),
+        event_handler=StreamHandler(thinking, stop),
     ) as stream:
         await stream.until_done()
+    
+    stop["done"] = True
+    await spinner_task
 
 
 if __name__ == "__main__":

@@ -1,0 +1,214 @@
+{
+    "common": {
+        "actions": {
+            "cancel": "Cancelar",
+            "confirm": "Confirmar",
+            "continue": "Continuar",
+            "goBack": "Volver",
+            "reset": "Restablecer",
+            "submit": "Enviar"
+        },
+        "status": {
+            "loading": "Cargando...",
+            "error": {
+                "default": "Ocurrió un error",
+                "serverConnection": "No se pudo conectar con el servidor"
+            }
+        }
+    },
+    "auth": {
+        "login": {
+            "title": "Inicia sesión para acceder a la aplicación",
+            "form": {
+                "email": {
+                    "label": "Dirección de correo electrónico",
+                    "required": "el correo electrónico es un campo obligatorio"
+                },
+                "password": {
+                    "label": "Contraseña",
+                    "required": "la contraseña es un campo obligatorio"
+                },
+                "actions": {
+                    "signin": "Iniciar sesión"
+                },
+                "alternativeText": {
+                    "or": "O"
+                }
+            },
+            "errors": {
+                "default": "No se pudo iniciar sesión",
+                "signin": "Intenta iniciar sesión con una cuenta diferente",
+                "oauthSignin": "Intenta iniciar sesión con una cuenta diferente",
+                "redirectUriMismatch": "La URI de redirección no coincide con la configuración de la aplicación OAuth",
+                "oauthCallback": "Intenta iniciar sesión con una cuenta diferente",
+                "oauthCreateAccount": "Intenta iniciar sesión con una cuenta diferente",
+                "emailCreateAccount": "Intenta iniciar sesión con una cuenta diferente",
+                "callback": "Intenta iniciar sesión con una cuenta diferente",
+                "oauthAccountNotLinked": "Para confirmar tu identidad, inicia sesión con la misma cuenta que usaste originalmente",
+                "emailSignin": "No se pudo enviar el correo electrónico",
+                "emailVerify": "Por favor verifica tu correo electrónico, se ha enviado un nuevo correo",
+                "credentialsSignin": "Error al iniciar sesión. Verifica que los datos proporcionados sean correctos",
+                "sessionRequired": "Por favor inicia sesión para acceder a esta página"
+            }
+        },
+        "provider": {
+            "continue": "Continuar con {{provider}}"
+        }
+    },
+    "chat": {
+        "input": {
+            "placeholder": "Escribe tu pregunta para Galileo aquí...",
+            "actions": {
+                "send": "Enviar mensaje",
+                "stop": "Detener tarea",
+                "attachFiles": "Adjuntar archivos"
+            }
+        },
+        "speech": {
+            "start": "Iniciar grabación",
+            "stop": "Detener grabación",
+            "connecting": "Conectando"
+        },
+        "fileUpload": {
+            "dragDrop": "Arrastra y suelta archivos aquí",
+            "browse": "Buscar archivos",
+            "sizeLimit": "Límite:",
+            "errors": {
+                "failed": "Error al cargar",
+                "cancelled": "Carga cancelada de"
+            }
+        },
+        "messages": {
+            "status": {
+                "using": "Usando",
+                "used": "Usado"
+            },
+            "actions": {
+                "copy": {
+                    "button": "Copiar al portapapeles",
+                    "success": "¡Copiado!"
+                }
+            },
+            "feedback": {
+                "positive": "Útil",
+                "negative": "No útil",
+                "edit": "Editar comentario",
+                "dialog": {
+                    "title": "Agregar un comentario",
+                    "submit": "Enviar comentario"
+                },
+                "status": {
+                    "updating": "Actualizando",
+                    "updated": "Comentario actualizado"
+                }
+            }
+        },
+        "history": {
+            "title": "Últimas entradas",
+            "empty": "Tan vacío...",
+            "show": "Mostrar historial"
+        },
+        "settings": {
+            "title": "Panel de configuración"
+        },
+        "watermark": "Construido con"
+    },
+    "threadHistory": {
+        "sidebar": {
+            "title": "Chats anteriores",
+            "filters": {
+                "search": "Buscar",
+                "placeholder": "Buscar conversaciones..."
+            },
+            "timeframes": {
+                "today": "Hoy",
+                "yesterday": "Ayer",
+                "previous7days": "Últimos 7 días",
+                "previous30days": "Últimos 30 días"
+            },
+            "empty": "No se encontraron hilos",
+            "actions": {
+                "close": "Cerrar barra lateral",
+                "open": "Abrir barra lateral"
+            }
+        },
+        "thread": {
+            "untitled": "Conversación sin título",
+            "menu": {
+                "rename": "Renombrar",
+                "delete": "Eliminar"
+            },
+            "actions": {
+                "delete": {
+                    "title": "Confirmar eliminación",
+                    "description": "Esto eliminará el hilo, así como sus mensajes y elementos. Esta acción no se puede deshacer",
+                    "success": "Chat eliminado",
+                    "inProgress": "Eliminando chat"
+                },
+                "rename": {
+                    "title": "Renombrar hilo",
+                    "description": "Ingresa un nuevo nombre para este hilo",
+                    "form": {
+                        "name": {
+                            "label": "Nombre",
+                            "placeholder": "Ingresa un nuevo nombre"
+                        }
+                    },
+                    "success": "¡Hilo renombrado!",
+                    "inProgress": "Renombrando hilo"
+                }
+            }
+        }
+    },
+    "navigation": {
+        "header": {
+            "chat": "Chat",
+            "readme": "Sobre nosotros",
+            "theme": {
+                "light": "Light Theme",
+                "dark": "Dark Theme",
+                "system": "Follow System"
+            }
+        },
+        "newChat": {
+            "button": "New Chat",
+            "dialog": {
+                "title": "Create New Chat",
+                "description": "This will clear your current chat history. Are you sure you want to continue?",
+                "tooltip": "New Chat"
+            }
+        },
+        "user": {
+            "menu": {
+                "settings": "Settings",
+                "settingsKey": "S",
+                "apiKeys": "API Keys",
+                "logout": "Logout"
+            }
+        }
+    },
+    "apiKeys": {
+        "title": "Required API Keys",
+        "description": "To use this app, the following API keys are required. The keys are stored on your device's local storage.",
+        "success": {
+            "saved": "Saved successfully"
+        }
+    },
+    "alerts": {
+        "info": "Info",
+        "note": "Note",
+        "tip": "Tip",
+        "important": "Important",
+        "warning": "Warning",
+        "caution": "Caution",
+        "debug": "Debug",
+        "example": "Example",
+        "success": "Success",
+        "help": "Help",
+        "idea": "Idea",
+        "pending": "Pending",
+        "security": "Security",
+        "beta": "Beta",
+        "best-practice": "Best Practice"
+    }
+}
