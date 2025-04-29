@@ -31,7 +31,7 @@ El objetivo es maximizar las probabilidades de éxito frente a comités de inver
 
 ## 🧠 ¿Quién está detrás de Galileo?
 
-**Galileo** es una creación de **[MIC Business Consulting](https://www.micbc.cl)**, una consultora chilena con +15 años liderando la innovación en empresas.  
+**Galileo** es una creación de **[MIC Business Consulting](https://www.micbc.cl)**, una consultora chilena con +15 años liderando la innovación en empresas. Puedes conocer nuestros servicios haciendo click [acá](https://d0a84d43-c1d6-45e4-a493-535ac4a3ec66.usrfiles.com/ugd/d0a84d_c3b6db13552047b7ade971871618dc4a.pdf)
 
 ### MIC Business Consulting en breve:
 - 🌍 Más de **3.100 compañías** medidas con su metodología.
