@@ -134,8 +134,23 @@ def auth(email: str, pwd: str | None = None):
 @cl.on_chat_start
 async def on_start():
     user: User = cl.user_session.get("user")
-    await cl.Message(f"👋 ¡Hola **{user.metadata['email']}**! Soy Galileo, agente de IA especializado en la revisión y optimización de decks de inversión para startups que buscan financiamiento de un CVC ¿En qué puedo ayudarte hoy?").send()
-
+    # await cl.Message(f"👋 ¡Hola **{user.metadata['email']}**! Soy Galileo, agente de IA especializado en la revisión y optimización de decks de inversión para startups que buscan financiamiento de un CVC ¿En qué puedo ayudarte hoy?").send()
+    welcome = (
+        f"👋 **¡Hola {user.metadata['email']}!**\n\n"
+        "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** para "
+        "startups y proyectos internos.\n\n"
+        "### ¿En qué puedo ayudarte?\n"
+        "• **Analizar decks** y documentación para un comité de Corporate Venture Capital (CVC).\n"
+        "• **Evaluar alineamiento estratégico**, tracción y métricas clave.\n"
+        "• Realizar **análisis financiero** y detección de riesgos.\n"
+        "• Comparar iniciativas contra **benchmarks de la industria** y generar **reportes de mejora**.\n\n"
+        "He apoyado a programas como *Caja Los Andes* y *Antofagasta Minerals*, facilitando decisiones de inversión más "
+        "rápidas y seguras.\n\n"
+        "Si lo deseas, **adjunta un PDF o presentación** y lo revisaremos juntos.\n\n"
+        "💡 _Ejemplos rápidos_: «Revisa este deck y dame riesgos principales» · «¿Cómo se alinea esta startup con nuestra estrategia ESG?»\n\n"
+        "**¿Con cuál de tus desafíos comenzamos hoy?**"
+    )
+    await cl.Message(welcome).send()
     thread = await oai.beta.threads.create()
     cl.user_session.set("thread_id", thread.id)
 
