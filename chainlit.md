@@ -48,8 +48,8 @@ El objetivo es maximizar las probabilidades de éxito frente a comités de inver
 ## 📚 Enlaces útiles
 
 - 🌐 Sitio web: [www.micbc.cl](https://www.micbc.cl)
-- 🧾 Conoce nuestros servicios: [Descargar Brochure](https://www.micbc.cl#brochure)
-- 🏆 Ranking Best Venture Builder: [Ver más](https://www.micbc.cl/rankings)
+- 🧾 Conoce nuestros servicios: [Descargar Brochure](https://d0a84d43-c1d6-45e4-a493-535ac4a3ec66.usrfiles.com/ugd/d0a84d_c3b6db13552047b7ade971871618dc4a.pdf)
+- 🏆 Ranking Best Venture Builder: [Ver más](https://www.micbc.cl/cv-cvc-chile-2024)
 
 ---
 
