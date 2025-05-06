@@ -47,6 +47,17 @@ FILE_MAP = {
     for f in sync_oai.files.list().data
     if f.purpose == "assistants"
 }
+# https://platform.openai.com/docs/assistants/tools/file-search
+VALID_EXTS = {
+    ".txt", ".md", ".rtf",
+    ".csv", ".tsv", ".tab", ".json", ".yaml", ".yml", ".xml",
+    ".html", ".htm",
+    ".pdf",
+    ".doc", ".docx", ".ppt", ".pptx",
+    ".xls", ".xlsx",
+    ".odt", ".odp",
+    ".epub",
+}
 
 def _extract_answer(msg):
     parts = []
@@ -65,17 +76,29 @@ async def _upload_files(elements: List[Element]) -> list[dict]:
     """Sube archivos adjuntos y construye la lista 'attachments' para la API."""
     if not elements:
         return []
-    file_ids = []
+    attachments, rejected = [], []
     for el in elements:
+        ext = Path(el.path).suffix.lower()
+        if ext not in VALID_EXTS:
+            rejected.append(f"⚠️ **{el.name}**: tipo de archivo no soportado.")
+            continue
         up = await oai.files.create(file=Path(el.path), purpose="assistants")
-        file_ids.append(up.id)
-    return [
-        {
-            "file_id": fid,
-            "tools": [{"type": "code_interpreter"}, {"type": "file_search"}],
-        }
-        for fid in file_ids
-    ]
+        attachments.append(
+            {
+                "file_id": up.id,
+                "tools": [
+                    {"type": "code_interpreter"},
+                    {"type": "file_search"},
+                ],
+            }
+        )
+    if rejected:
+        await cl.Message(
+            "⚠️ Estos archivos no son compatibles todavía y fueron omitidos: "
+            + ", ".join(rejected)
+        ).send()
+        
+    return attachments
 
 
 async def _spinner(msg: cl.Message, stop: dict):
