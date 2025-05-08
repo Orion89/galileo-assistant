@@ -10,10 +10,12 @@ from typing import List
 
 import chainlit as cl
 from chainlit import User
+from chainlit.config import config
 from chainlit.data import get_data_layer
 from chainlit.element import Element
 from dotenv import load_dotenv
 from openai import AsyncAssistantEventHandler, AsyncOpenAI, OpenAI
+from openai.types.beta.threads.runs import RunStep
 
 
 logging.basicConfig(
@@ -40,7 +42,7 @@ sync_oai  = OpenAI(api_key=OPENAI_KEY)
 assistant = sync_oai.beta.assistants.retrieve(ASST_ID)
 # Cliente asíncrono para la sesión
 oai = AsyncOpenAI(api_key=OPENAI_KEY)
-
+config.ui.name = assistant.name  
 # ─────────────────────────────  UTILIDADES  ────────────────────────────────────
 FILE_MAP = {
     f.id: f.filename.partition(".pdf")[0]
@@ -119,6 +121,7 @@ class StreamHandler(AsyncAssistantEventHandler):
         self.stop_flag = stop_flag
         self.msg:  cl.Message | None = None
         self.step: cl.Step    | None = None
+        self.current_tool_id = None # ID de la herramienta actual (code_interpreter/file_search)
 
     # — texto del asistente —
     async def on_text_created(self, text):
@@ -132,21 +135,69 @@ class StreamHandler(AsyncAssistantEventHandler):
     async def on_text_done(self, text):
         await self.msg.update()
 
+    async def on_event(self, event):
+        # OpenAI envía `event.event = "error"` si algo sale mal en el Run
+        if event.event == "error":
+            await cl.ErrorMessage(content=str(event.data.message)).send()
+
+    async def on_exception(self, exception: Exception):
+        """"Manejo de excepciones no controladas en el asistente."""
+        await cl.ErrorMessage(content=str(exception)).send()
+
     # — llamadas a herramientas (code_interpreter / file_search) —
     async def on_tool_call_created(self, call):
+        self.current_tool_id = call.id
         self.step = cl.Step(name=call.type, type="tool")
-        self.step.language = "python"
-        # Marca opcional: hora de inicio en UTC
+        if call.type == "code_interpreter":
+            self.step.show_input = "python"
         self.step.start = datetime.now(timezone.utc).isoformat()
         await self.step.send()
 
     async def on_tool_call_delta(self, delta, snapshot):
-        if delta.type == "code_interpreter" and delta.code_interpreter.input:
-            await self.step.stream_token(delta.code_interpreter.input)
+        # Si OpenAI abre otra llamada (p.e. varios code_interpreter) crear otro step
+        if snapshot.id != self.current_tool_id:
+            self.current_tool_id = snapshot.id
+            self.step = cl.Step(name=delta.type, type="tool")
+            self.step.start = datetime.now(timezone.utc).isoformat()
+            if snapshot.type == "code_interpreter":
+                self.step.show_input = "python"
+            await self.step.send()
+
+        # --- streaming dentro del mismo step ---
+        if delta.type == "code_interpreter":
+            # 1️⃣ input (código)
+            if delta.code_interpreter.input:
+                await self.step.stream_token(delta.code_interpreter.input, is_input=True)
+
+            # 2️⃣ outputs (logs o imágenes)
+            if delta.code_interpreter.outputs:
+                for output in delta.code_interpreter.outputs:
+                    if output.type == "logs":
+                        self.step.language = "markdown"
+                        self.step.output += output.logs
+                        self.step.end = datetime.now(timezone.utc).isoformat()
+                        await self.step.update()
+                    elif output.type == "image":
+                        # guarda JSON con metadatos para que Chainlit lo pinte
+                        self.step.language = "json"
+                        self.step.output = output.image.model_dump_json()
+
 
     async def on_tool_call_done(self, call):
         self.step.end = datetime.now(timezone.utc).isoformat()
         await self.step.update()
+
+    async def on_image_file_done(self, image_file):
+        img_id = image_file.file_id
+        response = await oai.files.with_raw_response.content(img_id)
+        image_element = cl.Image(
+            name=img_id, content=response.content, display="inline", size="large"
+        )
+        if not self.msg.elements:
+            self.msg.elements = []
+        self.msg.elements.append(image_element)
+        await self.msg.update()
+
 
 # ─────────────────────────  AUTENTICACIÓN POR CORREO  ──────────────────────────
 @cl.password_auth_callback
@@ -220,6 +271,16 @@ async def on_message(msg: cl.Message):
     
     stop["done"] = True
     await spinner_task
+
+# cuando un usuario hace clic en "Detener" mientras se ejecuta una tarea
+# https://docs.chainlit.io/concepts/chat-lifecycle#on-stop
+@cl.on_stop
+async def stop_chat():
+    run_step = cl.user_session.get("run_step")
+    if run_step:
+        await oai.beta.threads.runs.cancel(
+            thread_id=run_step.thread_id, run_id=run_step.run_id
+        )
 
 
 if __name__ == "__main__":
