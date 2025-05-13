@@ -44,7 +44,7 @@ graph LR
 
   D:::cloud  F:::cloud
   classDef cloud fill:#f2f6ff,stroke:#2962ff
-  ```
+```
 
 ## `requirements.txt`
 

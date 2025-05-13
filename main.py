@@ -50,15 +50,18 @@ FILE_MAP = {
     if f.purpose == "assistants"
 }
 # https://platform.openai.com/docs/assistants/tools/file-search
-VALID_EXTS = {
+FS_EXTS = {
     ".txt", ".md", ".rtf",
-    ".csv", ".tsv", ".tab", ".json", ".yaml", ".yml", ".xml",
+    ".json", ".yaml", ".yml", ".xml",
     ".html", ".htm",
     ".pdf",
     ".doc", ".docx", ".ppt", ".pptx",
-    ".xls", ".xlsx",
     ".odt", ".odp",
     ".epub",
+}
+CI_ONLY_EXTS = {
+    ".csv", ".tsv", ".tab",
+    ".xls", ".xlsx", ".ods",
 }
 
 def _extract_answer(msg):
@@ -75,31 +78,42 @@ def _extract_answer(msg):
 
 
 async def _upload_files(elements: List[Element]) -> list[dict]:
-    """Sube archivos adjuntos y construye la lista 'attachments' para la API."""
+    """
+    Sube los archivos adjuntos y construye la lista 'attachments' eligiendo la herramienta correcta según el tipo de archivo.
+    La herramienta File Search soporta los tipos detallados en: https://platform.openai.com/docs/assistants/tools/file-search#supported-files
+    """
     if not elements:
         return []
+
     attachments, rejected = [], []
+
     for el in elements:
         ext = Path(el.path).suffix.lower()
-        if ext not in VALID_EXTS:
-            rejected.append(f"⚠️ **{el.name}**: tipo de archivo no soportado.")
+
+        # ───────── Asignar herramientas ─────────
+        if ext in FS_EXTS:
+            tools = [
+                {"type": "code_interpreter"},
+                {"type": "file_search"},
+            ]
+        elif ext in CI_ONLY_EXTS:
+            tools = [
+                {"type": "code_interpreter"},
+            ]
+        else:
+            rejected.append(el.name)
             continue
+
+        # Subir a OpenAI File Storage
         up = await oai.files.create(file=Path(el.path), purpose="assistants")
-        attachments.append(
-            {
-                "file_id": up.id,
-                "tools": [
-                    {"type": "code_interpreter"},
-                    {"type": "file_search"},
-                ],
-            }
-        )
+        attachments.append({"file_id": up.id, "tools": tools})
+
+    # Avisar al usuario si algún archivo fue omitido
     if rejected:
         await cl.Message(
-            "⚠️ Estos archivos no son compatibles todavía y fueron omitidos: "
-            + ", ".join(rejected)
+            "⚠️ Formatos aún no soportados y omitidos: " + ", ".join(rejected)
         ).send()
-        
+
     return attachments
 
 
