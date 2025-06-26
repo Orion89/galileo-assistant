@@ -1,16 +1,12 @@
 import asyncio
 from datetime import datetime, timezone
-import json
 import logging
 import os
 import re
 import sys
 from datetime import datetime
-import aiohttp, mimetypes, tempfile, urllib.parse
 from pathlib import Path
 from typing import List
-
-from tools.definitions import DOWNLOAD_SCHEMA
 
 import chainlit as cl
 from chainlit import User
@@ -121,37 +117,6 @@ async def _upload_files(elements: List[Element]) -> list[dict]:
     return attachments
 
 
-async def download_and_upload(url: str) -> tuple[str, list[dict]] | None:
-    """
-    Descarga un archivo público, lo sube a OpenAI, y devuelve
-    (file_id, tools[]) o None si falla.
-    """
-    try:
-        filename = Path(urllib.parse.urlparse(url).path).name or "file"
-        # Inferir extensión desde el nombre o Content-Type
-        ext = Path(filename).suffix.lower()
-        async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(30)) as sess:
-            async with sess.get(url) as resp:
-                if resp.status != 200:
-                    return None
-                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-                    tmp.write(await resp.read())
-                    tmp_path = Path(tmp.name)
-
-        # Elegir herramientas en función de la extensión
-        if ext in FS_EXTS:
-            tools = [{"type": "code_interpreter"}, {"type": "file_search"}]
-        elif ext in CI_ONLY_EXTS:
-            tools = [{"type": "code_interpreter"}]
-        else:
-            return None
-
-        up = await oai.files.create(file=tmp_path, purpose="assistants")
-        return up.id, tools
-    except Exception:
-        return None
-
-
 async def _spinner(msg: cl.Message, stop: dict):
     """Muestra 'Pensando', 'Pensando.' … hasta que stop["done"] sea True."""
     dots = ["", ".", "..", "..."]
@@ -164,14 +129,13 @@ async def _spinner(msg: cl.Message, stop: dict):
 
 
 class StreamHandler(AsyncAssistantEventHandler):
-    def __init__(self, spin_msg:cl.Message, stop_flag:dict, thread_id:str):
+    def __init__(self, spin_msg: cl.Message, stop_flag: dict):
         super().__init__()
         self.spin_msg = spin_msg
         self.stop_flag = stop_flag
         self.msg:  cl.Message | None = None
         self.step: cl.Step    | None = None
         self.current_tool_id = None # ID de la herramienta actual (code_interpreter/file_search)
-        self.thread_id = thread_id
 
     # — texto del asistente —
     async def on_text_created(self, text):
@@ -194,34 +158,8 @@ class StreamHandler(AsyncAssistantEventHandler):
         """"Manejo de excepciones no controladas en el asistente."""
         await cl.ErrorMessage(content=str(exception)).send()
 
-    async def on_run_created(self, run):
-        self.run_id = run.id
-
     # — llamadas a herramientas (code_interpreter / file_search) —
     async def on_tool_call_created(self, call):
-        if call.type == "function" and call.function.name == "download_external_file":
-            try:
-                args = json.loads(call.function.arguments)
-                url  = args["url"]
-            except Exception:
-                output = {"error": "Invalid arguments"}
-            else:
-                res = await download_and_upload(url)
-                if res is None:
-                    output = {"error": "Download failed, link privado o formato no soportado"}
-                else:
-                    file_id, tools = res
-                    output = {"file_id": file_id, "tools": tools}
-
-            await oai.beta.threads.runs.submit_tool_outputs(
-                thread_id=self.thread_id,
-                run_id=self.run_id,
-                tool_outputs=[
-                    {"tool_call_id": call.id, "output": json.dumps(output)}
-                ],
-            )
-            return  # no creamos cl.Step para la función
-
         self.current_tool_id = call.id
         self.step = cl.Step(name=call.type, type="tool")
         if call.type == "code_interpreter":
@@ -296,8 +234,7 @@ async def on_start():
         "• Comparar iniciativas contra **benchmarks de la industria** y generar **reportes de mejora**.\n\n"
         "He apoyado a programas como *Caja Los Andes* y *Antofagasta Minerals*, facilitando decisiones de inversión más "
         "rápidas y seguras.\n\n"
-        "Si lo deseas, **adjunta un PDF, archivo de Excel o presentación** y lo revisaremos juntos.\n"
-        "Puedes también pasarme una URL de un archivo compatible almacenado en la nube. **Debes asegurarte de que el archivo tenga acceso público**. Si me pasas una URL de un archivo, puede que tarde entre 2 y 5 segundos en descargarlo.\n\n"
+        "Si lo deseas, **adjunta un PDF o presentación** y lo revisaremos juntos.\n\n"
         "💡 _Ejemplos rápidos_: «Revisa este deck y dame riesgos principales» · «¿Cómo se alinea esta startup con nuestra estrategia ESG?»\n\n"
         "**¿Con cuál de tus desafíos comenzamos hoy?**"
     )
@@ -342,8 +279,7 @@ async def on_message(msg: cl.Message):
     async with oai.beta.threads.runs.stream(
         thread_id=thread_id,
         assistant_id=ASST_ID,
-        tools=[DOWNLOAD_SCHEMA],
-        event_handler=StreamHandler(spin_msg=thinking, stop_flag=stop, thread_id=thread_id)
+        event_handler=StreamHandler(thinking, stop),
     ) as stream:
         await stream.until_done()
     
