@@ -4,7 +4,7 @@
 chainlit==2.5.5           # UI + Official Data Layer
 openai>=1.69         # Assistants API, openai>=1.14,<2.0 
 python-dotenv>=1.0
-
+botbuilder-core==4.17.0
 # ─── almacenamiento S3 ───────────────────────────────────────────────
 boto3>=1.38               # driver AWS S3 (STORAGE_PROVIDER=s3)
 
