@@ -223,8 +223,16 @@ def auth(email: str, pwd: str | None = None):
 async def on_start():
     user: User = cl.user_session.get("user")
     # await cl.Message(f"👋 ¡Hola **{user.metadata['email']}**! Soy Galileo, agente de IA especializado en la revisión y optimización de decks de inversión para startups que buscan financiamiento de un CVC ¿En qué puedo ayudarte hoy?").send()
-    email = user.metadata['email'] or user.identifier
-    display_name = user.metadata.get("name") or email
+    # email = user.metadata['email'] or user.identifier
+    # display_name = user.metadata.get("name") or email
+    meta = user.metadata or {}
+    email = meta.get("email") or user.identifier
+    display_name = meta.get("name") or email
+    if "email" not in meta:
+        meta["email"] = email
+        if dl := get_data_layer():
+            await dl.update_user(user.identifier, {"metadata": meta})
+    
     welcome = (
         f"👋 **¡Hola {display_name}!**\n\n" # "👋 **¡Hola {user.metadata['email']}!**\n\n"
         "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** para "
