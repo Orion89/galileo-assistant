@@ -64,6 +64,9 @@ CI_ONLY_EXTS = {
     ".xls", ".xlsx", ".ods",
 }
 
+def from_teams() -> bool:
+    return cl.context.session.get("channel") == "teams"
+
 def _extract_answer(msg):
     parts = []
     for item in msg.content:
@@ -119,6 +122,8 @@ async def _upload_files(elements: List[Element]) -> list[dict]:
 
 async def _spinner(msg: cl.Message, stop: dict):
     """Muestra 'Pensando', 'Pensando.' … hasta que stop["done"] sea True."""
+    if msg is None:
+        return
     dots = ["", ".", "..", "..."]
     i = 0
     while not stop["done"]:
@@ -140,7 +145,8 @@ class StreamHandler(AsyncAssistantEventHandler):
     # — texto del asistente —
     async def on_text_created(self, text):
         self.stop_flag["done"] = True
-        await self.spin_msg.remove()
+        if self.spin_msg:
+            await self.spin_msg.remove()
         self.msg = await cl.Message(author=assistant.name, content="").send()
 
     async def on_text_delta(self, delta, snapshot):
@@ -284,9 +290,14 @@ async def on_message(msg: cl.Message):
         attachments=attachments,
     )
 
-    thinking = await cl.Message("🤖 Pensando").send()
+    thinking = None
     stop = {"done": False}
-    spinner_task = asyncio.create_task(_spinner(thinking, stop))
+
+    if not from_teams():
+        thinking = await cl.Message("🤖 Pensando").send()
+        spinner_task = asyncio.create_task(_spinner(thinking, stop))
+    else:
+        spinner_task = None
 
     async with oai.beta.threads.runs.stream(
         thread_id=thread_id,
@@ -294,9 +305,10 @@ async def on_message(msg: cl.Message):
         event_handler=StreamHandler(thinking, stop),
     ) as stream:
         await stream.until_done()
-    
+
     stop["done"] = True
-    await spinner_task
+    if spinner_task:
+        await spinner_task
 
 # cuando un usuario hace clic en "Detener" mientras se ejecuta una tarea
 # https://docs.chainlit.io/concepts/chat-lifecycle#on-stop
