@@ -242,9 +242,11 @@ async def on_start():
             await dl.update_user_metadata(user.identifier, meta)
     
     welcome = (
-        f"👋 **¡Hola {display_name}!**\n\n" # "👋 **¡Hola {user.metadata['email']}!**\n\n"
-        "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** para "
-        "startups y proyectos internos.\n\n"
+        f"👋 **¡Hola {display_name}!**\n\n"
+        "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** "
+        "para startups y proyectos internos.\n\n"
+        "🎯 Ahora también puedes usarme directamente en **Microsoft Teams** como la aplicación **GalileoAI**, "
+        "para acceder a mis capacidades sin salir de tu flujo de trabajo.\n\n"
         "### ¿En qué puedo ayudarte?\n"
         "• **Analizar decks** y documentación para un comité de Corporate Venture Capital (CVC).\n"
         "• **Evaluar alineamiento estratégico**, tracción y métricas clave.\n"
@@ -256,6 +258,7 @@ async def on_start():
         "💡 _Ejemplos rápidos_: «Revisa este deck y dame riesgos principales» · «¿Cómo se alinea esta startup con nuestra estrategia ESG?»\n\n"
         "**¿Con cuál de tus desafíos comenzamos hoy?**"
     )
+
     await cl.Message(welcome).send()
     thread = await oai.beta.threads.create()
     cl.user_session.set("thread_id", thread.id)
