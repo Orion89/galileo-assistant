@@ -65,7 +65,9 @@ CI_ONLY_EXTS = {
 }
 
 def from_teams() -> bool:
-    return cl.context.session.get("channel") == "teams"
+    """Devuelve True si el mensaje llega desde Microsoft Teams."""
+    return getattr(cl.context.session, "channel", None) == "teams"
+
 
 def _extract_answer(msg):
     parts = []
@@ -241,25 +243,26 @@ async def on_start():
         if dl and hasattr(dl, "update_user_metadata"):
             await dl.update_user_metadata(user.identifier, meta)
     
-    welcome = (
-        f"👋 **¡Hola {display_name}!**\n\n"
-        "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** "
-        "para startups y proyectos internos.\n\n"
-        "🎯 Ahora también puedes usarme directamente en **Microsoft Teams** como la aplicación **GalileoAI**, "
-        "para acceder a mis capacidades sin salir de tu flujo de trabajo.\n\n"
-        "### ¿En qué puedo ayudarte?\n"
-        "• **Analizar decks** y documentación para un comité de Corporate Venture Capital (CVC).\n"
-        "• **Evaluar alineamiento estratégico**, tracción y métricas clave.\n"
-        "• Realizar **análisis financiero** y detección de riesgos.\n"
-        "• Comparar iniciativas contra **benchmarks de la industria** y generar **reportes de mejora**.\n\n"
-        "He apoyado a programas como *Caja Los Andes* y *Antofagasta Minerals*, facilitando decisiones de inversión más "
-        "rápidas y seguras.\n\n"
-        "Si lo deseas, **adjunta un PDF o presentación** y lo revisaremos juntos.\n\n"
-        "💡 _Ejemplos rápidos_: «Revisa este deck y dame riesgos principales» · «¿Cómo se alinea esta startup con nuestra estrategia ESG?»\n\n"
-        "**¿Con cuál de tus desafíos comenzamos hoy?**"
-    )
-
-    await cl.Message(welcome).send()
+    if not from_teams():
+        welcome = (
+            f"👋 **¡Hola {display_name}!**\n\n"
+            "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** "
+            "para startups y proyectos internos.\n\n"
+            "🎯 Ahora también puedes usarme directamente en **Microsoft Teams** como la aplicación **GalileoAI**, "
+            "para acceder a mis capacidades sin salir de tu flujo de trabajo.\n\n"
+            "### ¿En qué puedo ayudarte?\n"
+            "• **Analizar decks** y documentación para un comité de Corporate Venture Capital (CVC).\n"
+            "• **Evaluar alineamiento estratégico**, tracción y métricas clave.\n"
+            "• Realizar **análisis financiero** y detección de riesgos.\n"
+            "• Comparar iniciativas contra **benchmarks de la industria** y generar **reportes de mejora**.\n\n"
+            "He apoyado a programas como *Caja Los Andes* y *Antofagasta Minerals*, facilitando decisiones de inversión más "
+            "rápidas y seguras.\n\n"
+            "Si lo deseas, **adjunta un PDF o presentación** y lo revisaremos juntos.\n\n"
+            "💡 _Ejemplos rápidos_: «Revisa este deck y dame riesgos principales» · «¿Cómo se alinea esta startup con nuestra estrategia ESG?»\n\n"
+            "**¿Con cuál de tus desafíos comenzamos hoy?**"
+        )
+        await cl.Message(welcome).send()
+        
     thread = await oai.beta.threads.create()
     cl.user_session.set("thread_id", thread.id)
 
