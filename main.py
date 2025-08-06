@@ -196,7 +196,7 @@ class StreamHandler(AsyncAssistantEventHandler):
             except Exception:
                 result = {"error": "invalid_arguments"}
             else:
-                result = await download_and_attach(url) or {"error": "download_failed"}
+                result = await download_ext_files(url=url) or {"error": "download_failed"}
 
             # enviar la salida de la función al Assistants API
             await oai.beta.threads.runs.submit_tool_outputs(
