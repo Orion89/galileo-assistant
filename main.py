@@ -64,11 +64,6 @@ CI_ONLY_EXTS = {
     ".xls", ".xlsx", ".ods",
 }
 
-def from_teams() -> bool:
-    """Devuelve True si el mensaje llega desde Microsoft Teams."""
-    return getattr(cl.context.session, "channel", None) == "teams"
-
-
 def _extract_answer(msg):
     parts = []
     for item in msg.content:
@@ -243,8 +238,8 @@ async def on_start():
         if dl and hasattr(dl, "update_user_metadata"):
             await dl.update_user_metadata(user.identifier, meta)
     
-    if not from_teams():
-        welcome = (
+
+    welcome = (
             f"👋 **¡Hola {display_name}!**\n\n"
             "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** "
             "para startups y proyectos internos.\n\n"
@@ -260,8 +255,8 @@ async def on_start():
             "Si lo deseas, **adjunta un PDF o presentación** y lo revisaremos juntos.\n\n"
             "💡 _Ejemplos rápidos_: «Revisa este deck y dame riesgos principales» · «¿Cómo se alinea esta startup con nuestra estrategia ESG?»\n\n"
             "**¿Con cuál de tus desafíos comenzamos hoy?**"
-        )
-        await cl.Message(welcome).send()
+    )
+    await cl.Message(welcome).send()
         
     thread = await oai.beta.threads.create()
     cl.user_session.set("thread_id", thread.id)
@@ -296,15 +291,9 @@ async def on_message(msg: cl.Message):
         attachments=attachments,
     )
 
-    thinking = None
+    thinking = await cl.Message("🤖 Pensando").send()
     stop = {"done": False}
-
-    if not from_teams():
-        thinking = await cl.Message("🤖 Pensando").send()
-        spinner_task = asyncio.create_task(_spinner(thinking, stop))
-    else:
-        spinner_task = None
-
+    spinner_task = asyncio.create_task(_spinner(thinking, stop))
     async with oai.beta.threads.runs.stream(
         thread_id=thread_id,
         assistant_id=ASST_ID,
