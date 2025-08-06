@@ -1,10 +1,11 @@
 import asyncio
 from datetime import datetime, timezone
+from functools import partial
+import json
 import logging
 import os
 import re
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import List
 
@@ -14,9 +15,13 @@ from chainlit.config import config
 from chainlit.data import get_data_layer
 from chainlit.element import Element
 from dotenv import load_dotenv
+load_dotenv()
 from openai import AsyncAssistantEventHandler, AsyncOpenAI, OpenAI
 from openai.types.beta.threads.runs import RunStep
 
+from assistants import config as asst_config
+from tools.definitions.download_files import download_files_schema
+from tools.functions.download_external_file import download_and_attach
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,10 +35,12 @@ def _handle_exception(exc_type, exc, tb):
 sys.excepthook = _handle_exception
 
 # ─────────────────────────────  ENV & CONSTANTS  ───────────────────────────────
-load_dotenv()
 EMAIL_RX   = r"^[\w\.-]+@[\w\.-]+\.\w{2,4}$"
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-ASST_ID    = os.getenv("ASSISTANT_ID")
+# ASST_ID    = os.getenv("ASSISTANT_ID")
+ASST_ID = asst_config.ensure_assistant(assistant_def=asst_config.assistant_def.model_dump(), assistant_id=os.getenv("ASSISTANT_ID"))
+VS_ID = os.getenv("VECTOR_STORE_ID")
+
 if not OPENAI_KEY or not ASST_ID:
     raise RuntimeError("Debes definir OPENAI_API_KEY y ASSISTANT_ID.")
 
@@ -130,6 +137,18 @@ async def _spinner(msg: cl.Message, stop: dict):
         await asyncio.sleep(0.6)
 
 
+# ─────────────────────────────  TOOLS  ───────────────────────────────
+
+oai.beta.assistants.update(
+    ASST_ID,
+    tools=[
+        {"type": "code_interpreter"},
+        {"type": "file_search", "file_search": {"vector_store_ids": [VS_ID]}},
+        {"type": "function", "function": download_files_schema},
+    ],
+)
+download_ext_files = partial(download_and_attach, allowed_file_exts=FS_EXTS, code_interpreter_file_exts=CI_ONLY_EXTS, oai_client=oai)
+
 class StreamHandler(AsyncAssistantEventHandler):
     def __init__(self, spin_msg: cl.Message, stop_flag: dict):
         super().__init__()
@@ -163,6 +182,34 @@ class StreamHandler(AsyncAssistantEventHandler):
 
     # — llamadas a herramientas (code_interpreter / file_search) —
     async def on_tool_call_created(self, call):
+        """
+        1. Si la tool es download_external_file (function) → ejecuta descarga,
+           sube a File Storage y responde usando submit_tool_outputs; NO crea Step.
+        2. Para cualquier otra tool (code_interpreter, file_search…) →
+           crea un cl.Step como antes para mostrar progreso.
+        """
+        # interceptar llamada a la función personalizada
+        if call.type == "function" and call.function.name == "download_external_file":
+            try:
+                args = json.loads(call.function.arguments)
+                url  = args["url"]
+            except Exception:
+                result = {"error": "invalid_arguments"}
+            else:
+                result = await download_and_attach(url) or {"error": "download_failed"}
+
+            # enviar la salida de la función al Assistants API
+            await oai.beta.threads.runs.submit_tool_outputs(
+                thread_id=self.thread_id,
+                run_id=self.run_id,
+                tool_outputs=[{
+                    "tool_call_id": call.id,
+                    "output": json.dumps(result)
+                }],
+            )
+            return  # no crear Step para esta función
+
+        # flujo normal (code_interpreter, file_search, etc.)
         self.current_tool_id = call.id
         self.step = cl.Step(name=call.type, type="tool")
         if call.type == "code_interpreter":
@@ -243,8 +290,6 @@ async def on_start():
             f"👋 **¡Hola {display_name}!**\n\n"
             "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** "
             "para startups y proyectos internos.\n\n"
-            "🎯 Ahora también puedes usarme directamente en **Microsoft Teams** como la aplicación **GalileoAI**, "
-            "para acceder a mis capacidades sin salir de tu flujo de trabajo.\n\n"
             "### ¿En qué puedo ayudarte?\n"
             "• **Analizar decks** y documentación para un comité de Corporate Venture Capital (CVC).\n"
             "• **Evaluar alineamiento estratégico**, tracción y métricas clave.\n"
