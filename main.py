@@ -228,11 +228,16 @@ class StreamHandler(AsyncAssistantEventHandler):
                 or getattr(call, "run_id", None)
                 or getattr(call, "parent_run_id", None)
             )
-            if run_id is None:          # último fallback vía API
-                run_id = await self._latest_open_run()
 
-            if run_id is None:          # aún imposible → registra y aborta
-                logging.error("run_id sigue ausente; skip submit_tool_outputs")
+            if run_id is None: # último fallback vía API
+                runs = await oai.beta.threads.runs.list(thread_id=self.thread_id, limit=10)
+                for r in runs.data:
+                    if r.status == "requires_action":
+                        run_id = r.id
+                        break
+                    
+            if run_id is None: # aún imposible → registra y aborta
+                logging.error("run_id sigue ausente en estado requires_action; skip submit_tool_outputs")
                 return
 
             self.run_id = run_id  
@@ -301,6 +306,28 @@ class StreamHandler(AsyncAssistantEventHandler):
         self.msg.elements.append(image_element)
         await self.msg.update()
 
+
+
+@cl.set_starters
+async def set_starters():
+    return [
+        cl.Starter(
+            label="Formaliza tu Propuesta de Ahorro Energético",
+            message="Tengo una idea de cambiar todas las ampolletas incadecentes por lámparas LED para ahorrar energía ¿Puedes formular la idea para presentársela a la gerencia de innovación de forma clara en un párrafo de 5 líneas? También, indica el monto de la inversión y el monto de dinero ahorrado. Hazme todas las preguntas necesarias para completar esto.",
+            icon="/public/idea-svgrepo-com.svg",
+        ),
+
+        cl.Starter(
+            label="Formalizar idea de innovación con respaldos",
+            message="Tenemos un desafío en el área de ventas. Nuestros productos en general tienen nombres que son muy poco entendibles para nuestros clientes. Esto pasa en varios de nuestros productos. Por lo tanto, sería una muy buena idea tener una forma universal para nosotros, como compañía, que nos permita entendernos de forma interna y también hacia nuestros clientes respecto a los nombres de nuestros productos.",
+            icon="/public/idea-svgrepo-com.svg",
+        ),
+        cl.Starter(
+            label="Formula tu propuesta",
+            message="Tengo una idea de cambiar la leche actual que se usa en nuestra oficina por leche vegetal. ¿Me puedes ayudar a formular la idea para presentarla de forma clara al equipo de innovación en un párrafo de 5 líneas? También, indica el monto de la inversión y el monto de dinero ahorrado, indicando de dónde sacas esa información.",
+            icon="/public/idea-svgrepo-com.svg",
+        ),
+    ]
 
 # ─────────────────────────  AUTENTICACIÓN POR CORREO  ──────────────────────────
 @cl.password_auth_callback
