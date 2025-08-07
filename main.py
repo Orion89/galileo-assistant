@@ -211,12 +211,15 @@ class StreamHandler(AsyncAssistantEventHandler):
             else:
                 result = await download_external_file_partial(url=url) or {"error": "download_failed"}
 
-            run_id = self.run_id or getattr(call, "run_id", None)
+            run_id = (
+                self.run_id
+                or getattr(call, "run_id", None)
+                or getattr(call, "parent_run_id", None)
+            )
             if run_id is None:
-                # último recurso: consulta el run_id del snapshot (SDK ≥1.6)
-                run_id = getattr(call, "parent_run_id", None)
-
-            self.run_id = run_id
+                logging.error("run_id ausente; skip submit_tool_outputs")
+                return
+            self.run_id = run_id   # guarda para próximos eventos
 
             
             # enviar la salida de la función al Assistants API
