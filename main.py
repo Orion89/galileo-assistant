@@ -355,7 +355,7 @@ async def on_message(msg: cl.Message):
     async with oai.beta.threads.runs.stream(
         thread_id=thread_id,
         assistant_id=ASST_ID,
-        event_handler=StreamHandler(thinking, stop),
+        event_handler=StreamHandler(thinking, stop, thread_id=thread_id),
     ) as stream:
         await stream.until_done()
 
