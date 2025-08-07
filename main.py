@@ -20,7 +20,7 @@ from openai import AsyncAssistantEventHandler, AsyncOpenAI, OpenAI
 from openai.types.beta.threads.runs import RunStep
 
 from assistants import config as asst_config
-from tools.definitions.download_files import download_files_schema
+from tools.definitions.download_files import download_external_file
 from tools.functions.download_external_file import download_and_attach
 
 logging.basicConfig(
@@ -139,15 +139,17 @@ async def _spinner(msg: cl.Message, stop: dict):
 
 # ─────────────────────────────  TOOLS  ───────────────────────────────
 
-oai.beta.assistants.update(
+sync_oai.beta.assistants.update(
     ASST_ID,
     tools=[
         {"type": "code_interpreter"},
         {"type": "file_search", "file_search": {"vector_store_ids": [VS_ID]}},
-        {"type": "function", "function": download_files_schema},
+        {"type": "function", "function": download_external_file},
     ],
 )
-download_ext_files = partial(download_and_attach, allowed_file_exts=FS_EXTS, code_interpreter_file_exts=CI_ONLY_EXTS, oai_client=oai)
+download_external_file_partial = partial(download_and_attach, allowed_file_exts=FS_EXTS, code_interpreter_file_exts=CI_ONLY_EXTS, oai_client=oai)
+assistant_def_updated = sync_oai.beta.assistants.retrieve(ASST_ID).model_dump()
+print(f"Updated assistant definition: {json.dumps(assistant_def_updated, indent=2)}")
 
 class StreamHandler(AsyncAssistantEventHandler):
     def __init__(self, spin_msg: cl.Message, stop_flag: dict):
@@ -196,7 +198,7 @@ class StreamHandler(AsyncAssistantEventHandler):
             except Exception:
                 result = {"error": "invalid_arguments"}
             else:
-                result = await download_ext_files(url=url) or {"error": "download_failed"}
+                result = await download_external_file_partial(url=url) or {"error": "download_failed"}
 
             # enviar la salida de la función al Assistants API
             await oai.beta.threads.runs.submit_tool_outputs(

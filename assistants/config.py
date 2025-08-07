@@ -20,8 +20,7 @@ oai = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 ASST_ID = "asst_h9k83Vkidxq3sBfqjc7FhfZD" # os.getenv("ASSISTANT_ID")
 
 assistant_def = oai.beta.assistants.retrieve(ASST_ID)
-print(json.dumps(assistant_def.model_dump(), indent=2))
-
+# print(json.dumps(assistant_def.model_dump(), indent=2))
 if not os.path.exists(os.path.join(os.path.dirname(__file__), "config_galileo_v1.1.0.json")):
     with open(os.path.join(os.path.dirname(__file__), "config_galileo_v1.1.0.json"), "w") as f:
         json.dump(assistant_def.model_dump(), f, indent=2)

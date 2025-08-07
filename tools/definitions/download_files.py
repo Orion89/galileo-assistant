@@ -1,4 +1,4 @@
-download_files_schema = {
+download_external_file = {
     "name": "download_external_file",
     "description": "Download a publicly accessible file and attach it to the conversation",
     "parameters": {
