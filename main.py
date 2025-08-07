@@ -144,9 +144,10 @@ try:
         ASST_ID,
         tools=[
             {"type": "code_interpreter"},
-            {"type": "file_search", "vector_store_ids": [VS_ID]},
+            {"type": "file_search"},
             {"type": "function", "function": download_external_file},
         ],
+        tool_resources={"file_search": {"vector_store_ids": [VS_ID]}},
     )
 except BadRequestError as e:
     print(("Assistant update failed: %s", e))
