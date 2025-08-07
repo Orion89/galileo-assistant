@@ -211,10 +211,18 @@ class StreamHandler(AsyncAssistantEventHandler):
             else:
                 result = await download_external_file_partial(url=url) or {"error": "download_failed"}
 
+            run_id = self.run_id or getattr(call, "run_id", None)
+            if run_id is None:
+                # último recurso: consulta el run_id del snapshot (SDK ≥1.6)
+                run_id = getattr(call, "parent_run_id", None)
+
+            self.run_id = run_id
+
+            
             # enviar la salida de la función al Assistants API
             await oai.beta.threads.runs.submit_tool_outputs(
                 thread_id=self.thread_id,
-                run_id=self.run_id,
+                run_id=run_id,
                 tool_outputs=[{
                     "tool_call_id": call.id,
                     "output": json.dumps(result)
