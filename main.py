@@ -158,13 +158,15 @@ assistant_def_updated = sync_oai.beta.assistants.retrieve(ASST_ID).model_dump()
 print(f"Updated assistant definition: {json.dumps(assistant_def_updated, indent=2)}")
 
 class StreamHandler(AsyncAssistantEventHandler):
-    def __init__(self, spin_msg: cl.Message, stop_flag: dict):
+    def __init__(self, spin_msg: cl.Message, stop_flag: dict, thread_id: str):
         super().__init__()
         self.spin_msg = spin_msg
         self.stop_flag = stop_flag
+        self.thread_id = thread_id
+        self.run_id = None 
         self.msg:  cl.Message | None = None
         self.step: cl.Step    | None = None
-        self.current_tool_id = None # ID de la herramienta actual (code_interpreter/file_search)
+        self.current_tool_id = None # ID de la herramienta actual
 
     # — texto del asistente —
     async def on_text_created(self, text):
@@ -187,6 +189,9 @@ class StreamHandler(AsyncAssistantEventHandler):
     async def on_exception(self, exception: Exception):
         """"Manejo de excepciones no controladas en el asistente."""
         await cl.ErrorMessage(content=str(exception)).send()
+
+    async def on_run_created(self, run):
+        self.run_id = run.id
 
     # — llamadas a herramientas (code_interpreter / file_search) —
     async def on_tool_call_created(self, call):
