@@ -16,7 +16,7 @@ from chainlit.data import get_data_layer
 from chainlit.element import Element
 from dotenv import load_dotenv
 load_dotenv()
-from openai import AsyncAssistantEventHandler, AsyncOpenAI, OpenAI
+from openai import AsyncAssistantEventHandler, AsyncOpenAI, OpenAI, BadRequestError
 from openai.types.beta.threads.runs import RunStep
 
 from assistants import config as asst_config
@@ -139,14 +139,19 @@ async def _spinner(msg: cl.Message, stop: dict):
 
 # ─────────────────────────────  TOOLS  ───────────────────────────────
 
-sync_oai.beta.assistants.update(
-    ASST_ID,
-    tools=[
-        {"type": "code_interpreter"},
-        {"type": "file_search", "file_search": {"vector_store_ids": [VS_ID]}},
-        {"type": "function", "function": download_external_file},
-    ],
-)
+try:
+    sync_oai.beta.assistants.update(
+        ASST_ID,
+        tools=[
+            {"type": "code_interpreter"},
+            {"type": "file_search", "vector_store_ids": [VS_ID]},
+            {"type": "function", "function": download_external_file},
+        ],
+    )
+except BadRequestError as e:
+    print(("Assistant update failed: %s", e))
+    logging.error("Assistant update failed: %s", e)
+
 download_external_file_partial = partial(download_and_attach, allowed_file_exts=FS_EXTS, code_interpreter_file_exts=CI_ONLY_EXTS, oai_client=oai)
 assistant_def_updated = sync_oai.beta.assistants.retrieve(ASST_ID).model_dump()
 print(f"Updated assistant definition: {json.dumps(assistant_def_updated, indent=2)}")
