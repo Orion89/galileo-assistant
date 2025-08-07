@@ -167,6 +167,18 @@ class StreamHandler(AsyncAssistantEventHandler):
         self.msg:  cl.Message | None = None
         self.step: cl.Step    | None = None
         self.current_tool_id = None # ID de la herramienta actual
+    
+    async def _latest_open_run(self) -> str | None:
+        """
+        Devuelve el ID del run más reciente que esté esperando la salida
+        de herramientas (requires_action) o en progreso.
+        """
+        runs = await oai.beta.threads.runs.list(thread_id=self.thread_id, limit=5)
+        for run in runs.data:
+            if run.status in ("requires_action", "in_progress"):
+                return run.id
+        return None
+
 
     # — texto del asistente —
     async def on_text_created(self, text):
@@ -216,11 +228,14 @@ class StreamHandler(AsyncAssistantEventHandler):
                 or getattr(call, "run_id", None)
                 or getattr(call, "parent_run_id", None)
             )
-            if run_id is None:
-                logging.error("run_id ausente; skip submit_tool_outputs")
-                return
-            self.run_id = run_id   # guarda para próximos eventos
+            if run_id is None:          # último fallback vía API
+                run_id = await self._latest_open_run()
 
+            if run_id is None:          # aún imposible → registra y aborta
+                logging.error("run_id sigue ausente; skip submit_tool_outputs")
+                return
+
+            self.run_id = run_id  
             
             # enviar la salida de la función al Assistants API
             await oai.beta.threads.runs.submit_tool_outputs(
