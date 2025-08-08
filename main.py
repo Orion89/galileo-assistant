@@ -318,7 +318,7 @@ async def set_starters():
         ),
 
         cl.Starter(
-            label="Formalizar idea de innovación con respaldos",
+            label="Mejora tu idea de innovación con respaldos",
             message="Tenemos un desafío en el área de ventas. Nuestros productos en general tienen nombres que son muy poco entendibles para nuestros clientes. Esto pasa en varios de nuestros productos. Por lo tanto, sería una muy buena idea tener una forma universal para nosotros, como compañía, que nos permita entendernos de forma interna y también hacia nuestros clientes respecto a los nombres de nuestros productos.",
             icon="/public/idea-svgrepo-com.svg",
         ),
@@ -353,19 +353,19 @@ async def on_start():
     
 
     welcome = (
-            f"👋 **¡Hola {display_name}!**\n\n"
-            "Soy **Galileo**, tu agente de IA especializado en la **revisión y optimización de propuestas de inversión** "
-            "para startups y proyectos internos.\n\n"
-            "### ¿En qué puedo ayudarte?\n"
-            "• **Analizar decks** y documentación para un comité de Corporate Venture Capital (CVC).\n"
-            "• **Evaluar alineamiento estratégico**, tracción y métricas clave.\n"
-            "• Realizar **análisis financiero** y detección de riesgos.\n"
-            "• Comparar iniciativas contra **benchmarks de la industria** y generar **reportes de mejora**.\n\n"
-            "He apoyado a programas como *Caja Los Andes* y *Antofagasta Minerals*, facilitando decisiones de inversión más "
-            "rápidas y seguras.\n\n"
-            "Si lo deseas, **adjunta un PDF o presentación** y lo revisaremos juntos.\n\n"
-            "💡 _Ejemplos rápidos_: «Revisa este deck y dame riesgos principales» · «¿Cómo se alinea esta startup con nuestra estrategia ESG?»\n\n"
-            "**¿Con cuál de tus desafíos comenzamos hoy?**"
+        f"👋 **¡Hola {display_name}!**\n\n"
+        "Soy **Galileo**, tu agente de IA especializado en innovación.\n\n"
+        "Como primer punto, es clave que sepas que un proyecto de innovación se evalúa principalmente por el **impacto** que genera para la empresa. "
+        "Mi misión es ayudarte a transformar tu idea, por simple que parezca, en una propuesta de valor sólida y convincente.\n\n"
+        "### Juntos podemos:\n"
+        "• **Estructurar tu idea inicial** en una propuesta clara y profesional.\n"
+        "• **Cuantificar el impacto potencial**, calculando ahorros, beneficios y la inversión necesaria.\n"
+        "• **Construir un caso de negocio** listo para ser presentado al equipo de innovación.\n\n"
+        "**¿Cómo empezamos?** Simplemente cuéntame tu idea en un par de frases.\n\n"
+        "💡 _Ejemplos_: «Tengo una idea para cambiar la leche de la oficina por una opción vegetal» · «Tengo una idea de cambiar todas las ampolletas incandescentes por lámparas LED. Formula la idea para presentársela a la gerencia de innovación.»\n\n"
+        "--- \n"
+        "**P.D. ¿Ya tienes un proyecto avanzado o un deck de inversión?**\n"
+        "También puedo ayudarte a analizarlo en profundidad, evaluar riesgos y compararlo con benchmarks de la industria. Simplemente adjunta el archivo para comenzar."
     )
     await cl.Message(welcome).send()
         
