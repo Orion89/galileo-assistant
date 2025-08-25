@@ -428,4 +428,4 @@ async def stop_chat():
 
 
 if __name__ == "__main__":
-    cl.app(title="Galileo OpenAI Assistant", description="Chainlit app para interactuar con Galileo, de MIC Business Consulting.", theme="dark")
+    cl.app(title="Galileo AI Agent", description="Chainlit app para interactuar con Galileo, de MIC Business Consulting.", theme="dark")
