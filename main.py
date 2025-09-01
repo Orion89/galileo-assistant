@@ -22,6 +22,8 @@ from openai.types.beta.threads.runs import RunStep
 from assistants import config as asst_config
 from tools.definitions.download_files import download_external_file
 from tools.functions.download_external_file import download_and_attach
+from tools.definitions.rww import rww_evaluate as rww_function_def
+from tools.functions.rww_evaluate import rww_evaluate as rww_execute
 
 logging.basicConfig(
     level=logging.INFO,
@@ -146,6 +148,7 @@ try:
             {"type": "code_interpreter"},
             {"type": "file_search"},
             {"type": "function", "function": download_external_file},
+            {"type": "function", "function": rww_function_def},
         ],
         tool_resources={"file_search": {"vector_store_ids": [VS_ID]}},
     )
@@ -253,7 +256,78 @@ class StreamHandler(AsyncAssistantEventHandler):
             )
             return  # no crear Step para esta función
 
-        # flujo normal (code_interpreter, file_search, etc.)
+                # Manejo de funcion: rww_evaluate (NUEVO)
+        if call.type == "function" and call.function.name == "rww_evaluate":
+            # Crear Step visible para rww_evaluate
+            rww_step = cl.Step(name="rww_evaluate", type="tool")
+            rww_step.start = datetime.now(timezone.utc).isoformat()
+            await rww_step.send()
+
+            try:
+                args = json.loads(call.function.arguments)  # {"payload": {...}}
+                payload = args["payload"]
+            except Exception:
+                result = json.dumps({"error": "invalid_arguments"}, ensure_ascii=False)
+            else:
+                try:
+                    result_json = rww_execute(payload=payload)  # JSON string
+                    result = result_json if isinstance(result_json, str) else json.dumps(result_json, ensure_ascii=False)
+                except Exception as ex:
+                    result = json.dumps({"error": "execution_failed", "detail": str(ex)}, ensure_ascii=False)
+
+            run_id = (
+                self.run_id
+                or getattr(call, "run_id", None)
+                or getattr(call, "parent_run_id", None)
+            )
+            if run_id is None:
+                runs = await oai.beta.threads.runs.list(thread_id=self.thread_id, limit=10)
+                for r in runs.data:
+                    if r.status == "requires_action":
+                        run_id = r.id
+                        break
+            if run_id is None:
+                logging.error("run_id ausente en requires_action; skip submit_tool_outputs (rww_evaluate)")
+                rww_step.language = "markdown"
+                rww_step.output = "No se pudo enviar el resultado a OpenAI (run_id no encontrado)."
+                rww_step.end = datetime.now(timezone.utc).isoformat()
+                await rww_step.update()
+                return
+
+            self.run_id = run_id
+            await oai.beta.threads.runs.submit_tool_outputs(
+                thread_id=self.thread_id,
+                run_id=run_id,
+                tool_outputs=[{
+                    "tool_call_id": call.id,
+                    "output": result
+                }],
+            )
+
+            # Mostrar version_corta en el Step al concluir
+            version_corta = None
+            try:
+                parsed = json.loads(result)
+                version_corta = parsed.get("version_corta")
+                if not version_corta and parsed.get("decision") is not None:
+                    ps = parsed.get("pillar_scores") or []
+                    def pc(i):
+                        try:
+                            return ps[i].get("score_percent")
+                        except Exception:
+                            return None
+                    version_corta = (
+                        f"RWW={parsed.get('total_score')}/100 -> {parsed.get('decision')}"
+                        + (f". Real {pc(0)} | Win {pc(1)} | Worth {pc(2)}" if ps else "")
+                    )
+            except Exception:
+                version_corta = None
+
+            rww_step.language = "markdown"
+            rww_step.output = version_corta or "Evaluacion RWW ejecutada."
+            rww_step.end = datetime.now(timezone.utc).isoformat()
+            await rww_step.update()
+            return        # flujo normal (code_interpreter, file_search, etc.)
         self.current_tool_id = call.id
         self.step = cl.Step(name=call.type, type="tool")
         if call.type == "code_interpreter":
@@ -292,8 +366,9 @@ class StreamHandler(AsyncAssistantEventHandler):
 
 
     async def on_tool_call_done(self, call):
-        self.step.end = datetime.now(timezone.utc).isoformat()
-        await self.step.update()
+        if getattr(self, "step", None):
+            self.step.end = datetime.now(timezone.utc).isoformat()
+            await self.step.update()
 
     async def on_image_file_done(self, image_file):
         img_id = image_file.file_id
