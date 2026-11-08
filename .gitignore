@@ -2,5 +2,13 @@ llamadas_api.ipynb
 .env
 init_db.py
 chainlit-datalayer
-__pycache__
+__pycache__/
+*.py[cod]
+*$py.class
 demo.txt
+.venv/
+venv/
+*.db
+*.db-shm
+*.db-wal
+app.log

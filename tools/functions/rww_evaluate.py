@@ -1,7 +1,8 @@
 from __future__ import annotations
 import json
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Union
 from datetime import datetime
+from agents import function_tool
 from tools.schemas.rww_models import (
     TriState, EvidenceLevel, ItemAssessment,
     RealInputs, WinInputs, WorthInputs,
@@ -187,18 +188,12 @@ def _pilot_plan(metadata: Optional[IdeaMetadata], decision: str) -> PilotPlan:
         dependencies=["Sponsor interno", "Acceso a datos", "Ambiente de prueba", "Criterios de éxito definidos"]
     )
 
-# ─────────── Función principal (para Assistants API function-calling) ───────────
-def rww_evaluate(payload: dict) -> str:
+# ─────────── Función de evaluación central ───────────
+def evaluate_rww_logic(inp: RWWInput) -> RWWEvaluation:
     """
-    Ejecuta la evaluación R-W-W.
-    Argumento:
-        payload (dict): Objeto que cumple el schema de RWWInput.
-    Retorna:
-        str (JSON): RWWEvaluation serializado.
+    Ejecuta el cálculo completo de scoring R-W-W a partir del modelo RWWInput.
+    Retorna la instancia estructurada RWWEvaluation.
     """
-    # Validación y normalización
-    inp = RWWInput(**payload)
-
     # 1) Faltantes + preguntas
     missing, questions = _collect_missing_and_questions(inp)
 
@@ -247,7 +242,7 @@ def rww_evaluate(payload: dict) -> str:
     pilot = _pilot_plan(inp.metadata, decision)
 
     # 9) Ensamblar salida
-    out = RWWEvaluation(
+    return RWWEvaluation(
         timestamp=datetime.utcnow().isoformat(),
         metadata=inp.metadata,
         total_score=total_score,
@@ -265,5 +260,28 @@ def rww_evaluate(payload: dict) -> str:
         version_corta=version_corta,
         version_larga=version_larga
     )
-    return out.model_dump_json(exclude_none=True, ensure_ascii=False)
 
+def rww_evaluate(payload: Union[dict, RWWInput]) -> str:
+    """
+    Función base ejecutable que acepta tanto dict como RWWInput y retorna JSON string.
+    """
+    if isinstance(payload, dict):
+        inp = RWWInput(**payload)
+    else:
+        inp = payload
+    evaluation = evaluate_rww_logic(inp)
+    return evaluation.model_dump_json(exclude_none=True, ensure_ascii=False)
+
+# ─────────── Tool para OpenAI Agents SDK ───────────
+@function_tool(
+    name_override="rww_evaluate",
+    description_override="Evalúa una idea con la matriz R-W-W (Real/Win/Worth) y devuelve score, decisión y próximos pasos."
+)
+def rww_evaluate_tool(payload: RWWInput) -> str:
+    """
+    Evalúa una idea con la matriz R-W-W (Real/Win/Worth) y devuelve score, decisión y próximos pasos.
+    
+    Args:
+        payload: Objeto estructurado que contiene las evaluaciones de Real, Win y Worth.
+    """
+    return rww_evaluate(payload)

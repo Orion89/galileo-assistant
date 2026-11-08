@@ -1,10 +1,14 @@
 # requirements.txt  – producción minimal
 
 # ─── núcleo ──────────────────────────────────────────────────────────
-chainlit==2.5.5           # UI + Official Data Layer
-openai>=1.69         # Assistants API, openai>=1.14,<2.0 
+chainlit>=2.6.0           # UI + Official Data Layer
+openai-agents>=0.24.0     # OpenAI Agents SDK oficial
+openai>=3.0.0             # Driver base para Responses API y SDK
 python-dotenv>=1.0
 botbuilder-core==4.17.0
+aiohttp>=3.10.0           # Descargas asíncronas de archivos externos
+pydantic>=2.10.0          # Validación de schemas y modelos de tools
+
 # ─── almacenamiento S3 ───────────────────────────────────────────────
 boto3>=1.38               # driver AWS S3 (STORAGE_PROVIDER=s3)
 

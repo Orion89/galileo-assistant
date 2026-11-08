@@ -1,13 +1,12 @@
 import asyncio
 from datetime import datetime, timezone
-from functools import partial
 import json
 import logging
 import os
+from pathlib import Path
 import re
 import sys
-from pathlib import Path
-from typing import List
+from typing import Dict, List, Optional
 
 import chainlit as cl
 from chainlit import User
@@ -15,374 +14,132 @@ from chainlit.config import config
 from chainlit.data import get_data_layer
 from chainlit.element import Element
 from dotenv import load_dotenv
+
 load_dotenv()
-from openai import AsyncAssistantEventHandler, AsyncOpenAI, OpenAI, BadRequestError
-from openai.types.beta.threads.runs import RunStep
 
-from assistants import config as asst_config
-from tools.definitions.download_files import download_external_file
-from tools.functions.download_external_file import download_and_attach
-from tools.definitions.rww import rww_evaluate as rww_function_def
-from tools.functions.rww_evaluate import rww_evaluate as rww_execute
+from agents import Runner, SQLiteSession
+from openai import AsyncOpenAI
 
+from assistants.galileo_agent import create_galileo_agent
+from tools.functions.download_external_file import CI_ONLY_EXTS, FS_EXTS
+
+# ─────────────────────────────  LOGGING & ERRORES  ───────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)s  %(message)s",
-    handlers=[logging.FileHandler("app.log"), logging.StreamHandler()],
+    handlers=[logging.FileHandler("app.log", encoding="utf-8"), logging.StreamHandler()],
 )
+
 def _handle_exception(exc_type, exc, tb):
     if issubclass(exc_type, KeyboardInterrupt):
         return sys.__excepthook__(exc_type, exc, tb)
     logging.critical("❌ Excepción no controlada", exc_info=(exc_type, exc, tb))
+
 sys.excepthook = _handle_exception
 
 # ─────────────────────────────  ENV & CONSTANTS  ───────────────────────────────
-EMAIL_RX   = r"^[\w\.-]+@[\w\.-]+\.\w{2,4}$"
+EMAIL_RX = r"^[\w\.-]+@[\w\.-]+\.\w{2,4}$"
 OPENAI_KEY = os.getenv("OPENAI_API_KEY")
-# ASST_ID    = os.getenv("ASSISTANT_ID")
-ASST_ID = asst_config.ensure_assistant(assistant_def=asst_config.assistant_def.model_dump(), assistant_id=os.getenv("ASSISTANT_ID"))
-VS_ID = os.getenv("VECTOR_STORE_ID")
+DB_DIR = Path("conversations")
+DB_DIR.mkdir(exist_ok=True, parents=True)
+SESSIONS_DB_PATH = str(DB_DIR / "galileo_sessions.db")
 
-if not OPENAI_KEY or not ASST_ID:
-    raise RuntimeError("Debes definir OPENAI_API_KEY y ASSISTANT_ID.")
+config.ui.name = "Galileo"
 
-# Cliente síncrono solo para metadata
-sync_oai  = OpenAI(api_key=OPENAI_KEY)
-assistant = sync_oai.beta.assistants.retrieve(ASST_ID)
-# Cliente asíncrono para la sesión
-oai = AsyncOpenAI(api_key=OPENAI_KEY)
-config.ui.name = assistant.name  
-# ─────────────────────────────  UTILIDADES  ────────────────────────────────────
-FILE_MAP = {
-    f.id: f.filename.partition(".pdf")[0]
-    for f in sync_oai.files.list().data
-    if f.purpose == "assistants"
-}
-# https://platform.openai.com/docs/assistants/tools/file-search
-FS_EXTS = {
-    ".txt", ".md", ".rtf",
-    ".json", ".yaml", ".yml", ".xml",
-    ".html", ".htm",
-    ".pdf",
-    ".doc", ".docx", ".ppt", ".pptx",
-    ".odt", ".odp",
-    ".epub",
-}
-CI_ONLY_EXTS = {
-    ".csv", ".tsv", ".tab",
-    ".xls", ".xlsx", ".ods",
-}
-
-def _extract_answer(msg):
-    parts = []
-    for item in msg.content:
-        if item.type == "text":
-            txt = item.text.value
-            for ann in item.text.annotations:
-                if ann.type == "file_citation":
-                    src = ann.file_citation
-                    txt += f" [Fuente: {FILE_MAP.get(src.file_id, src.file_id)}]"
-            parts.append(txt)
-    return "\n\n".join(parts) if parts else "Sin respuesta."
+# Cliente asíncrono para gestión de archivos y Vector Stores efímeros
+oai = AsyncOpenAI(api_key=OPENAI_KEY) if OPENAI_KEY else None
 
 
-async def _upload_files(elements: List[Element]) -> list[dict]:
+# ─────────────────────────────  UTILIDADES DE ARCHIVOS  ─────────────────────────
+async def _get_or_create_session_vector_store(thread_id: str) -> Optional[str]:
     """
-    Sube los archivos adjuntos y construye la lista 'attachments' eligiendo la herramienta correcta según el tipo de archivo.
-    La herramienta File Search soporta los tipos detallados en: https://platform.openai.com/docs/assistants/tools/file-search#supported-files
+    Obtiene o crea un Vector Store efímero de OpenAI para la sesión actual.
+    Expira automáticamente tras 1 día de inactividad para optimizar costes.
     """
-    if not elements:
+    if not oai:
+        return None
+
+    vs_id = cl.user_session.get("vector_store_id")
+    if vs_id:
+        return vs_id
+
+    # Si existe en metadata persistente de Chainlit Data Layer, recuperarlo
+    if dl := get_data_layer():
+        try:
+            thread_data = await dl.get_thread(thread_id)
+            if thread_data and thread_data.get("metadata", {}).get("vector_store_id"):
+                vs_id = thread_data["metadata"]["vector_store_id"]
+                cl.user_session.set("vector_store_id", vs_id)
+                return vs_id
+        except Exception as e:
+            logging.warning(f"No se pudo consultar metadata del hilo en Data Layer: {e}")
+
+    # Crear nuevo Vector Store efímero
+    try:
+        vs = await oai.beta.vector_stores.create(
+            name=f"galileo_session_{thread_id}",
+            expires_after={"anchor": "last_active_at", "days": 1},
+        )
+        vs_id = vs.id
+        cl.user_session.set("vector_store_id", vs_id)
+        logging.info(f"Vector Store efímero creado para sesión {thread_id}: {vs_id}")
+
+        if dl := get_data_layer():
+            await dl.update_thread(
+                thread_id=thread_id,
+                metadata={"vector_store_id": vs_id},
+            )
+        return vs_id
+    except Exception as e:
+        logging.error(f"Fallo al crear Vector Store efímero: {e}")
+        return None
+
+
+async def _process_user_files(elements: List[Element], thread_id: str) -> list[str]:
+    """
+    Sube los archivos adjuntos del usuario a OpenAI File Storage y los indexa
+    en el Vector Store efímero de la sesión (si son documentos) o los prepara para Code Interpreter.
+    Retorna la lista de file_ids procesados.
+    """
+    if not elements or not oai:
         return []
 
-    attachments, rejected = [], []
+    processed_ids = []
+    rejected = []
+    vs_id = await _get_or_create_session_vector_store(thread_id)
 
     for el in elements:
         ext = Path(el.path).suffix.lower()
 
-        # ───────── Asignar herramientas ─────────
-        if ext in FS_EXTS:
-            tools = [
-                {"type": "code_interpreter"},
-                {"type": "file_search"},
-            ]
-        elif ext in CI_ONLY_EXTS:
-            tools = [
-                {"type": "code_interpreter"},
-            ]
-        else:
+        if ext not in FS_EXTS and ext not in CI_ONLY_EXTS:
             rejected.append(el.name)
             continue
 
-        # Subir a OpenAI File Storage
-        up = await oai.files.create(file=Path(el.path), purpose="assistants")
-        attachments.append({"file_id": up.id, "tools": tools})
+        try:
+            purpose = "assistants"
+            up = await oai.files.create(file=Path(el.path), purpose=purpose)
+            processed_ids.append(up.id)
 
-    # Avisar al usuario si algún archivo fue omitido
+            # Si es compatible con File Search y tenemos Vector Store, indexarlo
+            if ext in FS_EXTS and vs_id:
+                await oai.beta.vector_stores.files.create(
+                    vector_store_id=vs_id,
+                    file_id=up.id,
+                )
+                logging.info(f"Archivo {el.name} ({up.id}) indexado en Vector Store {vs_id}")
+        except Exception as e:
+            logging.error(f"Error procesando archivo {el.name}: {e}")
+            await cl.ErrorMessage(content=f"Error al procesar el archivo {el.name}: {str(e)}").send()
+
     if rejected:
         await cl.Message(
             "⚠️ Formatos aún no soportados y omitidos: " + ", ".join(rejected)
         ).send()
 
-    return attachments
+    return processed_ids
 
 
-async def _spinner(msg: cl.Message, stop: dict):
-    """Muestra 'Pensando', 'Pensando.' … hasta que stop["done"] sea True."""
-    if msg is None:
-        return
-    dots = ["", ".", "..", "..."]
-    i = 0
-    while not stop["done"]:
-        msg.content = f"🤖 Pensando{dots[i % 4]}"
-        await msg.update()
-        i += 1
-        await asyncio.sleep(0.6)
-
-
-# ─────────────────────────────  TOOLS  ───────────────────────────────
-
-try:
-    sync_oai.beta.assistants.update(
-        ASST_ID,
-        tools=[
-            {"type": "code_interpreter"},
-            {"type": "file_search"},
-            {"type": "function", "function": download_external_file},
-            {"type": "function", "function": rww_function_def},
-        ],
-        tool_resources={"file_search": {"vector_store_ids": [VS_ID]}},
-    )
-except BadRequestError as e:
-    print(("Assistant update failed: %s", e))
-    logging.error("Assistant update failed: %s", e)
-
-download_external_file_partial = partial(download_and_attach, allowed_file_exts=FS_EXTS, code_interpreter_file_exts=CI_ONLY_EXTS, oai_client=oai)
-assistant_def_updated = sync_oai.beta.assistants.retrieve(ASST_ID).model_dump()
-print(f"Updated assistant definition: {json.dumps(assistant_def_updated, indent=2)}")
-
-class StreamHandler(AsyncAssistantEventHandler):
-    def __init__(self, spin_msg: cl.Message, stop_flag: dict, thread_id: str):
-        super().__init__()
-        self.spin_msg = spin_msg
-        self.stop_flag = stop_flag
-        self.thread_id = thread_id
-        self.run_id = None 
-        self.msg:  cl.Message | None = None
-        self.step: cl.Step    | None = None
-        self.current_tool_id = None # ID de la herramienta actual
-    
-    async def _latest_open_run(self) -> str | None:
-        """
-        Devuelve el ID del run más reciente que esté esperando la salida
-        de herramientas (requires_action) o en progreso.
-        """
-        runs = await oai.beta.threads.runs.list(thread_id=self.thread_id, limit=5)
-        for run in runs.data:
-            if run.status in ("requires_action", "in_progress"):
-                return run.id
-        return None
-
-
-    # — texto del asistente —
-    async def on_text_created(self, text):
-        self.stop_flag["done"] = True
-        if self.spin_msg:
-            await self.spin_msg.remove()
-        self.msg = await cl.Message(author=assistant.name, content="").send()
-
-    async def on_text_delta(self, delta, snapshot):
-        await self.msg.stream_token(delta.value)
-
-    async def on_text_done(self, text):
-        await self.msg.update()
-
-    async def on_event(self, event):
-        # OpenAI envía `event.event = "error"` si algo sale mal en el Run
-        if event.event == "error":
-            await cl.ErrorMessage(content=str(event.data.message)).send()
-
-    async def on_exception(self, exception: Exception):
-        """"Manejo de excepciones no controladas en el asistente."""
-        await cl.ErrorMessage(content=str(exception)).send()
-
-    async def on_run_created(self, run):
-        self.run_id = run.id
-
-    # — llamadas a herramientas (code_interpreter / file_search) —
-    async def on_tool_call_created(self, call):
-        """
-        1. Si la tool es download_external_file (function) → ejecuta descarga,
-           sube a File Storage y responde usando submit_tool_outputs; NO crea Step.
-        2. Para cualquier otra tool (code_interpreter, file_search…) →
-           crea un cl.Step como antes para mostrar progreso.
-        """
-        # interceptar llamada a la función personalizada
-        if call.type == "function" and call.function.name == "download_external_file":
-            try:
-                args = json.loads(call.function.arguments)
-                url  = args["url"]
-            except Exception:
-                result = {"error": "invalid_arguments"}
-            else:
-                result = await download_external_file_partial(url=url) or {"error": "download_failed"}
-
-            run_id = (
-                self.run_id
-                or getattr(call, "run_id", None)
-                or getattr(call, "parent_run_id", None)
-            )
-
-            if run_id is None: # último fallback vía API
-                runs = await oai.beta.threads.runs.list(thread_id=self.thread_id, limit=10)
-                for r in runs.data:
-                    if r.status == "requires_action":
-                        run_id = r.id
-                        break
-                    
-            if run_id is None: # aún imposible → registra y aborta
-                logging.error("run_id sigue ausente en estado requires_action; skip submit_tool_outputs")
-                return
-
-            self.run_id = run_id  
-            
-            # enviar la salida de la función al Assistants API
-            await oai.beta.threads.runs.submit_tool_outputs(
-                thread_id=self.thread_id,
-                run_id=run_id,
-                tool_outputs=[{
-                    "tool_call_id": call.id,
-                    "output": json.dumps(result)
-                }],
-            )
-            return  # no crear Step para esta función
-
-                # Manejo de funcion: rww_evaluate (NUEVO)
-        if call.type == "function" and call.function.name == "rww_evaluate":
-            # Crear Step visible para rww_evaluate
-            rww_step = cl.Step(name="rww_evaluate", type="tool")
-            rww_step.start = datetime.now(timezone.utc).isoformat()
-            await rww_step.send()
-
-            try:
-                args = json.loads(call.function.arguments)  # {"payload": {...}}
-                payload = args["payload"]
-            except Exception:
-                result = json.dumps({"error": "invalid_arguments"}, ensure_ascii=False)
-            else:
-                try:
-                    result_json = rww_execute(payload=payload)  # JSON string
-                    result = result_json if isinstance(result_json, str) else json.dumps(result_json, ensure_ascii=False)
-                except Exception as ex:
-                    result = json.dumps({"error": "execution_failed", "detail": str(ex)}, ensure_ascii=False)
-
-            run_id = (
-                self.run_id
-                or getattr(call, "run_id", None)
-                or getattr(call, "parent_run_id", None)
-            )
-            if run_id is None:
-                runs = await oai.beta.threads.runs.list(thread_id=self.thread_id, limit=10)
-                for r in runs.data:
-                    if r.status == "requires_action":
-                        run_id = r.id
-                        break
-            if run_id is None:
-                logging.error("run_id ausente en requires_action; skip submit_tool_outputs (rww_evaluate)")
-                rww_step.language = "markdown"
-                rww_step.output = "No se pudo enviar el resultado a OpenAI (run_id no encontrado)."
-                rww_step.end = datetime.now(timezone.utc).isoformat()
-                await rww_step.update()
-                return
-
-            self.run_id = run_id
-            await oai.beta.threads.runs.submit_tool_outputs(
-                thread_id=self.thread_id,
-                run_id=run_id,
-                tool_outputs=[{
-                    "tool_call_id": call.id,
-                    "output": result
-                }],
-            )
-
-            # Mostrar version_corta en el Step al concluir
-            version_corta = None
-            try:
-                parsed = json.loads(result)
-                version_corta = parsed.get("version_corta")
-                if not version_corta and parsed.get("decision") is not None:
-                    ps = parsed.get("pillar_scores") or []
-                    def pc(i):
-                        try:
-                            return ps[i].get("score_percent")
-                        except Exception:
-                            return None
-                    version_corta = (
-                        f"RWW={parsed.get('total_score')}/100 -> {parsed.get('decision')}"
-                        + (f". Real {pc(0)} | Win {pc(1)} | Worth {pc(2)}" if ps else "")
-                    )
-            except Exception:
-                version_corta = None
-
-            rww_step.language = "markdown"
-            rww_step.output = version_corta or "Evaluacion RWW ejecutada."
-            rww_step.end = datetime.now(timezone.utc).isoformat()
-            await rww_step.update()
-            return        # flujo normal (code_interpreter, file_search, etc.)
-        self.current_tool_id = call.id
-        self.step = cl.Step(name=call.type, type="tool")
-        if call.type == "code_interpreter":
-            self.step.show_input = "python"
-        self.step.start = datetime.now(timezone.utc).isoformat()
-        await self.step.send()
-
-    async def on_tool_call_delta(self, delta, snapshot):
-        # Si OpenAI abre otra llamada (p.e. varios code_interpreter) crear otro step
-        if snapshot.id != self.current_tool_id:
-            self.current_tool_id = snapshot.id
-            self.step = cl.Step(name=delta.type, type="tool")
-            self.step.start = datetime.now(timezone.utc).isoformat()
-            if snapshot.type == "code_interpreter":
-                self.step.show_input = "python"
-            await self.step.send()
-
-        # --- streaming dentro del mismo step ---
-        if delta.type == "code_interpreter":
-            # 1️⃣ input (código)
-            if delta.code_interpreter.input:
-                await self.step.stream_token(delta.code_interpreter.input, is_input=True)
-
-            # 2️⃣ outputs (logs o imágenes)
-            if delta.code_interpreter.outputs:
-                for output in delta.code_interpreter.outputs:
-                    if output.type == "logs":
-                        self.step.language = "markdown"
-                        self.step.output += output.logs
-                        self.step.end = datetime.now(timezone.utc).isoformat()
-                        await self.step.update()
-                    elif output.type == "image":
-                        # guarda JSON con metadatos para que Chainlit lo pinte
-                        self.step.language = "json"
-                        self.step.output = output.image.model_dump_json()
-
-
-    async def on_tool_call_done(self, call):
-        if getattr(self, "step", None):
-            self.step.end = datetime.now(timezone.utc).isoformat()
-            await self.step.update()
-
-    async def on_image_file_done(self, image_file):
-        img_id = image_file.file_id
-        response = await oai.files.with_raw_response.content(img_id)
-        image_element = cl.Image(
-            name=img_id, content=response.content, display="inline", size="large"
-        )
-        if not self.msg.elements:
-            self.msg.elements = []
-        self.msg.elements.append(image_element)
-        await self.msg.update()
-
-
-
+# ─────────────────────────────  STARTERS & AUTH  ───────────────────────────────
 @cl.set_starters
 async def set_starters():
     return [
@@ -391,7 +148,6 @@ async def set_starters():
             message="Tengo una idea de cambiar todas las ampolletas incadecentes por lámparas LED para ahorrar energía ¿Puedes formular la idea para presentársela a la gerencia de innovación de forma clara en un párrafo de 5 líneas? También, indica el monto de la inversión y el monto de dinero ahorrado. Hazme todas las preguntas necesarias para completar esto.",
             icon="/public/idea-svgrepo-com.svg",
         ),
-
         cl.Starter(
             label="Mejora tu idea de innovación con respaldos",
             message="Tenemos un desafío en el área de ventas. Nuestros productos en general tienen nombres que son muy poco entendibles para nuestros clientes. Esto pasa en varios de nuestros productos. Por lo tanto, sería una muy buena idea tener una forma universal para nosotros, como compañía, que nos permita entendernos de forma interna y también hacia nuestros clientes respecto a los nombres de nuestros productos.",
@@ -404,32 +160,31 @@ async def set_starters():
         ),
     ]
 
-# ─────────────────────────  AUTENTICACIÓN POR CORREO  ──────────────────────────
+
 @cl.password_auth_callback
 def auth(email: str, pwd: str | None = None):
     return User(identifier=email, metadata={"email": email}) if re.match(EMAIL_RX, email) else None
+
 
 # ─────────────────────────────  CICLO DE VIDA  ────────────────────────────────
 @cl.on_chat_start
 async def on_start():
     user = cl.user_session.get("user")
-    meta = dict(user.metadata or {})
+    meta = dict(user.metadata or {}) if user else {}
 
-    email = meta.get("email") or user.identifier
+    email = meta.get("email") or (user.identifier if user else "Usuario")
     display_name = meta.get("name") or email
-    # 2persistir e-mail si faltaba (sólo si el helper existe)
-    if "email" not in meta:
-        meta["email"] = email                    # actualiza en memoria
-        user.metadata = meta                     # refleja en sesión
 
-        dl = get_data_layer()
-        if dl and hasattr(dl, "update_user_metadata"):
-            await dl.update_user_metadata(user.identifier, meta)
-    
+    if user and "email" not in meta:
+        meta["email"] = email
+        user.metadata = meta
+        if dl := get_data_layer():
+            if hasattr(dl, "update_user_metadata"):
+                await dl.update_user_metadata(user.identifier, meta)
 
     welcome = (
         f"👋 **¡Hola {display_name}!**\n\n"
-        "Soy **Galileo**, tu agente de IA especializado en innovación.\n\n"
+        "Soy **Galileo**, tu agente de IA especializado en innovación y Corporate Venture Capital.\n\n"
         "Como primer punto, es clave que sepas que un proyecto de innovación se evalúa principalmente por el **impacto** que genera para la empresa. "
         "Mi misión es ayudarte a transformar tu idea, por simple que parezca, en una propuesta de valor sólida y convincente.\n\n"
         "### Juntos podemos:\n"
@@ -443,64 +198,163 @@ async def on_start():
         "También puedo ayudarte a analizarlo en profundidad, evaluar riesgos y compararlo con benchmarks de la industria. Simplemente adjunta el archivo para comenzar."
     )
     await cl.Message(welcome).send()
-        
-    thread = await oai.beta.threads.create()
-    cl.user_session.set("thread_id", thread.id)
+
+    thread_id = cl.context.session.thread_id
+    cl.user_session.set("thread_id", thread_id)
 
     if dl := get_data_layer():
-        if await dl.get_user(user.identifier) is None:
+        if user and await dl.get_user(user.identifier) is None:
             await dl.create_user(user)
         await dl.update_thread(
-            thread_id=cl.context.session.thread_id,
-            metadata={"openai_thread_id": thread.id},
+            thread_id=thread_id,
+            metadata={"session_id": thread_id},
         )
+
 
 @cl.on_chat_resume
 async def on_resume(meta):
-    if tid := meta.get("metadata", {}).get("openai_thread_id"):
-        cl.user_session.set("thread_id", tid)
+    thread_id = meta.get("id") or cl.context.session.thread_id
+    cl.user_session.set("thread_id", thread_id)
+    if vs_id := meta.get("metadata", {}).get("vector_store_id"):
+        cl.user_session.set("vector_store_id", vs_id)
+
 
 # ─────────────────────────────  MANEJO DE MENSAJES  ───────────────────────────
 @cl.on_message
 async def on_message(msg: cl.Message):
-    thread_id = cl.user_session.get("thread_id")
-    if not thread_id:
-        await cl.Message("⚠️ Sesión no inicializada.").send()
-        return
+    thread_id = cl.user_session.get("thread_id") or cl.context.session.thread_id
 
-    attachments = await _upload_files(msg.elements)
+    # 1. Procesar archivos adjuntos si existen
+    if msg.elements:
+        await _process_user_files(msg.elements, thread_id)
 
-    await oai.beta.threads.messages.create(
-        thread_id=thread_id,
-        role="user",
-        content=msg.content,
-        attachments=attachments,
+    # 2. Configurar agente y sesión multi-turno persistente
+    vs_id = cl.user_session.get("vector_store_id")
+    agent = create_galileo_agent(vector_store_id=vs_id)
+    session = SQLiteSession(session_id=thread_id, db_path=SESSIONS_DB_PATH)
+
+    # 3. Mostrar spinner de pensamiento
+    spin_msg = await cl.Message("🤖 Pensando").send()
+
+    # 4. Iniciar ejecución en streaming con OpenAI Agents SDK
+    runner_result = Runner.run_streamed(
+        agent,
+        input=msg.content,
+        session=session,
     )
+    cl.user_session.set("runner_result", runner_result)
 
-    thinking = await cl.Message("🤖 Pensando").send()
-    stop = {"done": False}
-    spinner_task = asyncio.create_task(_spinner(thinking, stop))
-    async with oai.beta.threads.runs.stream(
-        thread_id=thread_id,
-        assistant_id=ASST_ID,
-        event_handler=StreamHandler(thinking, stop, thread_id=thread_id),
-    ) as stream:
-        await stream.until_done()
+    response_msg: Optional[cl.Message] = None
+    active_steps: Dict[str, cl.Step] = {}
 
-    stop["done"] = True
-    if spinner_task:
-        await spinner_task
+    try:
+        async for event in runner_result.stream_events():
+            # A) Streaming de texto incremental (tokens del modelo)
+            if event.type == "raw_response_event":
+                data = getattr(event, "data", None)
+                if data and getattr(data, "type", None) == "response.output_text.delta":
+                    delta_text = getattr(data, "delta", "")
+                    if delta_text:
+                        if spin_msg:
+                            await spin_msg.remove()
+                            spin_msg = None
+                        if response_msg is None:
+                            response_msg = await cl.Message(author="Galileo", content="").send()
+                        await response_msg.stream_token(delta_text)
 
-# cuando un usuario hace clic en "Detener" mientras se ejecuta una tarea
-# https://docs.chainlit.io/concepts/chat-lifecycle#on-stop
+            # B) Eventos de elementos de ejecución (tools, handoffs, etc.)
+            elif event.type == "run_item_stream_event":
+                event_name = getattr(event, "name", None)
+                item = getattr(event, "item", None)
+
+                # Inicio de llamada a herramienta
+                if event_name == "tool_called" or getattr(item, "type", None) == "tool_call_item":
+                    if spin_msg:
+                        await spin_msg.remove()
+                        spin_msg = None
+
+                    tool_name = getattr(item, "tool_name", None) or "herramienta"
+                    call_id = getattr(item, "call_id", None) or tool_name
+
+                    step = cl.Step(name=tool_name, type="tool")
+                    if tool_name == "code_interpreter":
+                        step.show_input = "python"
+                    step.start = datetime.now(timezone.utc).isoformat()
+                    await step.send()
+                    active_steps[call_id] = step
+
+                # Retorno de salida de herramienta
+                elif event_name == "tool_output" or getattr(item, "type", None) == "tool_call_output_item":
+                    call_id = getattr(item, "call_id", None)
+                    output_data = getattr(item, "output", "")
+
+                    # Buscar el step correspondiente
+                    step = active_steps.get(call_id)
+                    if not step and active_steps:
+                        # Fallback al último step activo
+                        call_id, step = active_steps.popitem()
+                        active_steps[call_id] = step
+
+                    if step:
+                        step.end = datetime.now(timezone.utc).isoformat()
+                        formatted_output = str(output_data)
+
+                        # Formato visual enriquecido para rww_evaluate
+                        try:
+                            parsed = json.loads(output_data) if isinstance(output_data, str) else output_data
+                            if isinstance(parsed, dict) and "total_score" in parsed:
+                                short_summary = parsed.get("version_corta")
+                                decision = parsed.get("decision")
+                                score = parsed.get("total_score")
+                                formatted_output = short_summary or f"Evaluación R-W-W completada: **{score}/100 → {decision}**"
+                        except Exception:
+                            pass
+
+                        step.output = formatted_output
+                        await step.update()
+
+            # C) Actualización del agente activo
+            elif event.type == "agent_updated_stream_event":
+                new_agent = getattr(event, "new_agent", None)
+                if new_agent and response_msg:
+                    response_msg.author = getattr(new_agent, "name", "Galileo")
+
+        # Asegurar remoción de spinner y actualización final del mensaje
+        if spin_msg:
+            await spin_msg.remove()
+        if response_msg:
+            await response_msg.update()
+
+    except asyncio.CancelledError:
+        logging.info("Ejecución cancelada por el usuario.")
+        if spin_msg:
+            await spin_msg.remove()
+        if response_msg:
+            await response_msg.stream_token("\n\n⏹️ *Respuesta detenida por el usuario.*")
+            await response_msg.update()
+    except Exception as e:
+        logging.error(f"Error durante el stream del runner: {e}", exc_info=True)
+        if spin_msg:
+            await spin_msg.remove()
+        await cl.ErrorMessage(content=f"Ocurrió un error inesperado: {str(e)}").send()
+
+
+# ─────────────────────────────  CANCELACIÓN  ───────────────────────────────────
 @cl.on_stop
 async def stop_chat():
-    run_step = cl.user_session.get("run_step")
-    if run_step:
-        await oai.beta.threads.runs.cancel(
-            thread_id=run_step.thread_id, run_id=run_step.run_id
-        )
+    """Cancela inmediatamente el runner activo si el usuario pulsa 'Detener'."""
+    runner_result = cl.user_session.get("runner_result")
+    if runner_result:
+        try:
+            runner_result.cancel(mode="immediate")
+            logging.info("runner_result.cancel() ejecutado con éxito.")
+        except Exception as e:
+            logging.error(f"Error al cancelar runner: {e}")
 
 
 if __name__ == "__main__":
-    cl.app(title="Galileo AI Agent", description="Chainlit app para interactuar con Galileo, de MIC Business Consulting.", theme="dark")
+    cl.app(
+        title="Galileo AI Agent",
+        description="Chainlit app para interactuar con Galileo, de MIC Business Consulting.",
+        theme="dark",
+    )
